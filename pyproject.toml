@@ -6,6 +6,6 @@ requires-python = ">=3.13"
 dependencies = [
     "h5py>=3.15.1",
     "numpy>=2.3.4",
+    "pigpio==1.78",
     "pyserial>=3.5",
-    "rpi-gpio==0.7.1",
 ]
