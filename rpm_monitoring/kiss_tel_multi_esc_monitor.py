@@ -11,7 +11,7 @@ from collections import deque
 import numpy as np
 import h5py
 from datetime import datetime
-import RPi.GPIO as GPIO
+import pigpio
 
 
 def crc8_kiss(data):
@@ -31,6 +31,7 @@ def crc8_kiss(data):
 
 class Timer:
     """High precision timer for synchronization"""
+
     def __init__(self):
         self.start_time = time.perf_counter()
         self.start_time_wall = time.time()
@@ -42,30 +43,31 @@ class Timer:
 
 class TriggerMonitor:
     """Monitor trigger signal with hardware interrupts"""
-    def __init__(self, trigger_pin=17, timer=None, trigger_type='rising', buffer_size=10000):
 
+    def __init__(self, trigger_pin=17, timer=None, trigger_type='rising', buffer_size=10000):
         self.trigger_pin = trigger_pin
         self.timer = timer if timer else Timer()
         self.trigger_events = deque(maxlen=buffer_size)
         self.lock = threading.Lock()
         self.enabled = True
 
-        GPIO.setmode(GPIO.BCM)
-        GPIO.setup(self.trigger_pin, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
+        self.pi = pigpio.pi()
 
-        edge = dict(rising=GPIO.RISING, falling=GPIO.FALLING).get(trigger_type, GPIO.BOTH)
+        self.pi.set_mode(self.trigger_pin, pigpio.INPUT)
+        self.pi.set_pull_up_down(self.trigger_pin, pigpio.PUD_DOWN)
 
-        GPIO.add_event_detect(self.trigger_pin, edge, callback=self.trigger_callback)
+        edge = dict(rising=pigpio.RISING_EDGE, falling=pigpio.FALLING_EDGE).get(trigger_type, pigpio.EITHER_EDGE)
 
-    def trigger_callback(self, channel):
+        self.pi.callback(self.trigger_pin, edge, self.trigger_callback)
+
+    def trigger_callback(self, gpio, level, tick):
         """Called when trigger event occurs"""
         timestamp = self.timer.get_time()
-        state = GPIO.input(self.trigger_pin)
 
         with self.lock:
             self.trigger_events.append({
                 'timestamp': timestamp,
-                'state': state
+                'state': level
             })
 
     def pop_all_triggers(self):
@@ -76,7 +78,8 @@ class TriggerMonitor:
             return events
 
     def cleanup(self):
-        GPIO.cleanup()
+        if hasattr(self, 'pi') and self.pi.connected:
+            self.pi.stop()
 
 
 class KISSTelemtryMonitor:
@@ -483,8 +486,8 @@ class MultiESCMonitor:
         # Initialize logger if enabled
         self.enable_logging = enable_logging
         self.logger = TelemetryHDF5Logger(foldername=log_folder, filename=log_filename, flush_interval=flush_interval,
-                                          enable_trigger=self.enable_trigger)\
-                      if self.enable_logging else None
+                                          enable_trigger=self.enable_trigger) \
+            if self.enable_logging else None
 
         self.threads = []
         self.running = False
