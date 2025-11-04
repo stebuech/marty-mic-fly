@@ -1,0 +1,11 @@
+[project]
+name = "martymicfly"
+version = "0.1.0"
+description = "Git repo for all things code related to the DFG Project 'Fliegendes Messmikrofon' (working title: MaryMicFly)"
+requires-python = ">=3.13"
+dependencies = [
+    "h5py>=3.15.1",
+    "numpy>=2.3.4",
+    "pyserial>=3.5",
+    "rpi-gpio==0.7.1",
+]
