@@ -2,6 +2,10 @@
 import pigpio
 import time
 import threading
+import os
+
+#TODO: This is only needed when DAQ is used, due to sounddevice/pigpio interferences. Then DAQ must live in a different python instance!!
+os.sched_setaffinity(0, {0})
 
 
 class DShot:
@@ -167,7 +171,7 @@ class DShot:
         self.pi.stop()
 
 
-class MultiESC:
+class MultiESCControler:
     """
     Control multiple ESCs simultaneously with continuous command stream.
 
@@ -175,7 +179,7 @@ class MultiESC:
     to all ESCs at 1-2 kHz, which is required for ESCs to arm and accept throttle commands.
     """
 
-    def __init__(self, gpio_pins, dshot_speed=600, update_rate_hz=1000):
+    def __init__(self, gpio_pins, dshot_speed=600, update_rate_hz=1500):
         """
         Initialize multiple ESC controllers with continuous command stream
 
@@ -235,7 +239,7 @@ class MultiESC:
                 self.command_thread.join(timeout=2.0)
             print("Command stream stopped")
 
-    def arm_all(self, duration=3.0):
+    def arm_all(self, duration=5.0):
         """
         Arm all ESCs by sending MOTOR_STOP commands for specified duration
 
@@ -300,16 +304,14 @@ class MultiESC:
         for esc in self.escs:
             esc.cleanup()
 
-
-# Example usage
-if __name__ == "__main__":
+def run_test():
     # Define GPIO pins for 4 ESCs
     ESC_PINS = [18, 19, 20, 21]
     max_throttle = 20
     multi_esc = None
     try:
         # Initialize multi-ESC controller with DShot300 (600 now working for now)
-        multi_esc = MultiESC(ESC_PINS, dshot_speed=300)
+        multi_esc = MultiESCControler(ESC_PINS, dshot_speed=300)
 
         print("Starting throttle test...")
 
@@ -318,8 +320,8 @@ if __name__ == "__main__":
 
         # Gradually increase throttle
         for throttle in range(0, max_throttle+1, 5):
-            print(f"Throttle: {throttle}%")
-            multi_esc.set_all_throttle(throttle)
+            print(f"Throttle: {max(throttle,1)}%")
+            multi_esc.set_all_throttle(max(throttle,1))
             time.sleep(1)
 
         # Hold at max_throttle% for 2 seconds
@@ -327,8 +329,8 @@ if __name__ == "__main__":
 
         # Gradually decrease throttle
         for throttle in range(max_throttle, -1, -5):
-            print(f"Throttle: {throttle}%")
-            multi_esc.set_all_throttle(throttle)
+            print(f"Throttle: {max(throttle,1)}%")
+            multi_esc.set_all_throttle(max(throttle,1))
             time.sleep(1)
 
         # Test individual control
@@ -337,7 +339,7 @@ if __name__ == "__main__":
         time.sleep(2)
 
         # Stop all motors
-        multi_esc.set_all_throttle(0)
+        multi_esc.set_all_throttle(1)
         time.sleep(1)
 
     except KeyboardInterrupt:
@@ -348,3 +350,8 @@ if __name__ == "__main__":
             multi_esc.disarm_all()
             multi_esc.cleanup()
         print("Cleanup complete")
+
+
+# Example usage
+if __name__ == "__main__":
+    run_test()
