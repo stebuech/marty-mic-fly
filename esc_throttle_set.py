@@ -4,7 +4,8 @@ import time
 import threading
 import os
 
-#TODO: This is only needed when DAQ is used, due to sounddevice/pigpio interferences. Then DAQ must live in a different python instance!!
+#TODO: Setting CPU affinity is only needed when DAQ is used in parallel, due to sounddevice/pigpio interferences. Then DAQ must live in a
+# different python instance!! Also requires to start pigpiod with sudo taskset -c 0 pigpiod (set cpu affinity to cpu 0)
 os.sched_setaffinity(0, {0})
 
 

@@ -12,8 +12,8 @@ from datetime import datetime
 import sounddevice as sd
 
 
-#TODO: This is only needed when MultiESCControler is used, due to sounddevice/pigpio interferences. Then MultiESCControler must live in
-# different python instance!!
+#TODO: Setting CPU affinity is only needed when MultiESCControler is used in parallel, due to sounddevice/pigpio interferences. Then
+# MultiESCControler must live in different python instance!!
 os.sched_setaffinity(0, {1, 2, 3}) # Pin this process to cores 1-3 (avoid core 0 where pigpiod runs)
 
 
@@ -126,7 +126,7 @@ class ESCTelemtry:
         self.running = False
 
     def find_sync(self):
-        """Find packet synchronization"""
+        """Find packet synchronization. Last byte in packet equals checksum of previous 9 bytes."""
         while len(self.buffer) >= 20:
             if len(self.buffer) >= 10:
                 packet = self.buffer[:10]
@@ -250,7 +250,9 @@ class ESCTelemtry:
 class MicArray:
     """Monitor microphone array from USB device (MCHStreamer Kit from miniDSP)"""
 
-    def __init__(self, timer=None, buffer_size=1000, channels=16, sample_rate=48000, blocksize=1024, dtype='float32'):
+    def __init__(self, timer=None, buffer_size=1000, channels=16, sample_rate=48000, blocksize=1024, dtype='float32',
+                 enable_resync=False, resync_interval=100, convergence_rate=0.001, drift_threshold=0.00025,
+                 drift_statistic='median'):
         """
         Initialize microphone array monitor for MCHStreamer device
 
@@ -261,6 +263,10 @@ class MicArray:
             sample_rate: Sample rate in Hz (default: 48000)
             blocksize: Blocksize for callback (default: 1024)
             dtype: Data type (default: 'float32')
+            enable_resync: Enable periodic re-synchronization with hardware timestamps (default: True)
+            resync_interval: Number of blocks between re-sync checks (default: 100)
+            convergence_rate: Rate of smooth correction convergence (default: 0.001 = 0.1% per resync)
+            drift_statistic: Statistic to use for drift filtering: 'mean' or 'median' (default: 'mean')
         """
         self.timer = timer if timer else Timer()
         self.channels = channels
@@ -279,9 +285,31 @@ class MicArray:
         self.stream_time_offset = None
         self.sync_lock = threading.Lock()
 
-        self.sample_time_offsets_in_block = np.arange(blocksize) / self.sample_rate
         self.total_blocks = 0
         self.overflows = 0
+
+        # Frame counter for consistent timestamp generation
+        self.frame_count = 0
+        self.reference_time = None
+
+        # Periodic re-synchronization with smooth correction
+        self.enable_resync = enable_resync
+        self.resync_interval = resync_interval
+        self.drift_threshold = drift_threshold
+        self.convergence_rate = convergence_rate
+        self.drift_statistic = drift_statistic
+        self.blocks_since_resync = 0
+        self.timing_drift_data = deque(maxlen=round(buffer_size / blocksize + 0.5))
+        self.sample_rate_correction = 1.0  # Adaptive correction factor for smooth convergence
+
+        # Adaptive window for drift filtering (grows over time)
+        self.min_drift_window = 5  # Start with 5 measurements (~10 seconds)
+        self.max_drift_window = 30  # Grow to 30 measurements (~60 seconds)
+        self.drift_window_size = self.min_drift_window
+        self.resync_count = 0  # Track how many resyncs have occurred
+
+        # Buffer for drift filtering
+        self.drift_history = deque(maxlen=self.max_drift_window)
 
     def find_mchstreamer(self):
         """Find MCHStreamer device index"""
@@ -296,16 +324,117 @@ class MicArray:
 
         Dumps block into buffer.
 
-        Use inputBufferAdcTime to get hardware-level timestamps and synchronize them with Timer reference.
+        Uses frame-counter based timestamping for consistent timestamps. This eliminates timing jitter from hardware clock quantization
+        but trades off absolute synchronization accuracy with external events.
 
-        Generates per-sample timestamps based on sample rate.
+        Optional periodic re-synchronization compares frame-based time with hardware timestamps
+        to detect and gradually correct for long-term clock drift.
+
+        Generates per-sample timestamps based on sample rate and frame count.
         """
         if status:
             self.overflows += 1
 
-        adc_block_timestamp = time_info.inputBufferAdcTime
+        # Initialize reference time on first callback
+        if self.reference_time is None:
+            self.reference_time = self.timer.get_time()
 
-        per_sample_timestamps = adc_block_timestamp + self.stream_time_offset + self.sample_time_offsets_in_block
+        # Calculate current frame index for this block
+        current_frame = self.frame_count
+
+        # Generate per-sample timestamps based on frame count with adaptive correction.
+        # Use current correction factor for THIS block's timestamps to ensure timestamps consistency while gradually correcting drift
+        sample_indices = np.arange(current_frame, current_frame + frames)
+        corrected_sample_rate = self.sample_rate * self.sample_rate_correction
+        per_sample_timestamps = self.reference_time + sample_indices / corrected_sample_rate
+
+        # Calculate expected time of first sample in frame based on current frame-counter state
+        expected_time_elapsed = self.frame_count / corrected_sample_rate
+        frame_based_time = self.reference_time + expected_time_elapsed
+
+        self.frame_count += frames
+
+        # Set adc_based_time = frame_based_time on first callback
+        if self.stream_time_offset is None:
+            self.stream_time_offset = frame_based_time - time_info.inputBufferAdcTime
+        adc_based_time = time_info.inputBufferAdcTime + self.stream_time_offset
+        drift = frame_based_time - adc_based_time
+
+        # Add current drift to buffer
+        self.drift_history.append(drift)
+
+        # Calculate filtered drift using running statistic (mean or median) from buffer
+        # This filters out quantization noise while preserving real drift signal
+
+        # Use last N measurements based on current window size (or all if less than N exist)
+        recent_drifts = list(self.drift_history)[-self.drift_window_size:]
+        if len(recent_drifts) > self.drift_threshold:
+            drift_mean = np.median(recent_drifts) if self.drift_statistic == 'median' else np.mean(recent_drifts)
+            drift_std = np.std(recent_drifts)
+        else:
+            drift_mean, drift_std = 0, 0
+
+
+        # Get hardware timestamp estimate (with quantization)
+        hardware_time = self.timer.get_time()
+
+        # Store complete drift data for logging (can be cleared without affecting filtering)
+        self.timing_drift_data.append({
+            'frame_count': self.frame_count,
+            'drift': drift,
+            'drift_mean': drift_mean,
+            'drift_std': drift_std,
+            'hw_timestamp': hardware_time,
+            'adc_timestamp': adc_based_time,
+            'mic_timestamp': per_sample_timestamps[0],
+            'correction_factor': self.sample_rate_correction
+        })
+
+
+        #TODO/Note: resync might not work correctly due to occasional large jumps in drift (mean/median) value. This makes the "base" level
+        # drift away when resync is enabled, which would have been stable around 0 when disabled. Additionaly, base level seems stabel
+        # around 0 zero without resync anyway, so keep disabled for now!
+
+        # Periodic re-synchronization to correct for clock drift (smooth correction).
+        # Happens AFTER timestamp generation to avoid discontinuities
+        if self.enable_resync and self.blocks_since_resync >= self.resync_interval:
+            self.blocks_since_resync = 0
+            self.resync_count += 1
+
+            # Grow adaptive window size (every 10 resyncs, increase by 1 until max)
+            if self.resync_count % 10 == 0 and self.drift_window_size < self.max_drift_window:
+                self.drift_window_size += 1
+
+            # Apply smooth correction by adjusting sample rate correction factor
+            # Use FILTERED drift_mean instead of raw drift to avoid reacting to quantization noise
+            if abs(drift_mean) > self.drift_threshold:
+                # Calculate drift rate using filtered drift (drift per second)
+                drift_rate = drift_mean / (expected_time_elapsed if expected_time_elapsed > 0 else 0)
+
+                # Store old correction factor before changing it
+                old_correction = self.sample_rate_correction
+
+                # Adjust sample rate correction factor gradually
+                # Positive drift_rate = running too fast, need to decrease sample rate
+                # Negative drift_rate = running too slow, need to increase sample rate
+                self.sample_rate_correction *= (1.0 - drift_rate * self.convergence_rate)
+
+                # Clamp correction factor to reasonable bounds (0.99 to 1.01 = ±1%)
+                self.sample_rate_correction = np.clip(self.sample_rate_correction, 0.99, 1.01)
+
+                # CRITICAL: Adjust reference_time to maintain continuity at the correction point
+                # When we change the correction factor, we need to ensure that the timestamp
+                # at the current frame_count remains the same under both old and new corrections
+                # Old: t = reference_time + frame_count / (sample_rate * old_correction)
+                # New: t = new_reference_time + frame_count / (sample_rate * new_correction)
+                # Setting them equal and solving for new_reference_time:
+                # new_reference_time = reference_time + frame_count / (sample_rate * old_correction)
+                #                                     - frame_count / (sample_rate * new_correction)
+                time_to_current_frame_old = self.frame_count / (self.sample_rate * old_correction)
+                time_to_current_frame_new = self.frame_count / (self.sample_rate * self.sample_rate_correction)
+                self.reference_time = self.reference_time + time_to_current_frame_old - time_to_current_frame_new
+
+        self.blocks_since_resync += 1
 
         block = {
             'timestamp': per_sample_timestamps,
@@ -329,7 +458,6 @@ class MicArray:
             blocksize=self.blocksize,
             callback=self.callback
         )
-        self.stream_time_offset = self.timer.get_time() - self.stream.time
 
         self.stream.start()
         self.running = True
@@ -352,6 +480,13 @@ class MicArray:
         """Get the most recent block"""
         with self.lock:
             return self.data[-1] if self.data else None
+
+    def pop_all_timing_drift_data(self):
+        """Get and clear all timing drift data"""
+        with self.lock:
+            drift_data = list(self.timing_drift_data)
+            self.timing_drift_data.clear()
+            return drift_data
 
 
 class HDF5Logger:
@@ -387,10 +522,14 @@ class HDF5Logger:
             self.mic_array_group = self.file.create_group('mic_array')
             self.mic_array_datasets = {}
             self.mic_array_initialized = False
+            self.timing_drift_datasets = {}
+            self.timing_drift_initialized = False
         else:
             self.mic_array_group = None
             self.mic_array_datasets = {}
             self.mic_array_initialized = False
+            self.timing_drift_datasets = {}
+            self.timing_drift_initialized = False
 
         if esc_tel_data:
             self.esc_group = self.file.create_group('esc_telemetry')
@@ -490,6 +629,80 @@ class HDF5Logger:
         self.mic_array_group.attrs['dtype'] = str(dtype)
 
         self.mic_array_initialized = True
+
+    def initialize_timing_drift(self):
+        """Initialize timing drift datasets for mic array synchronization diagnostics"""
+        if self.timing_drift_initialized or not self.mic_array_data:
+            return
+
+        # Create timing_drift subgroup under mic_array
+        timing_drift_group = self.mic_array_group.create_group('timing_drift')
+
+        self.timing_drift_datasets = {
+            'frame_count': timing_drift_group.create_dataset(
+                'frame_count', shape=(0,), maxshape=(None,), dtype=np.int64, compression='gzip'
+            ),
+            'drift': timing_drift_group.create_dataset(
+                'drift', shape=(0,), maxshape=(None,), dtype=np.float64, compression='gzip'
+            ),
+            'drift_mean': timing_drift_group.create_dataset(
+                'drift_mean', shape=(0,), maxshape=(None,), dtype=np.float64, compression='gzip'
+            ),
+            'drift_std': timing_drift_group.create_dataset(
+                'drift_std', shape=(0,), maxshape=(None,), dtype=np.float64, compression='gzip'
+            ),
+            'hw_timestamp': timing_drift_group.create_dataset(
+                'hw_timestamp', shape=(0,), maxshape=(None,), dtype=np.float64, compression='gzip'
+            ),
+            'adc_timestamp': timing_drift_group.create_dataset(
+                'adc_timestamp', shape=(0,), maxshape=(None,), dtype=np.float64, compression='gzip'
+            ),
+            'mic_timestamp': timing_drift_group.create_dataset(
+                'mic_timestamp', shape=(0,), maxshape=(None,), dtype=np.float64, compression='gzip'
+            ),
+            'correction_factor': timing_drift_group.create_dataset(
+                'correction_factor', shape=(0,), maxshape=(None,), dtype=np.float64, compression='gzip'
+            )
+        }
+
+        timing_drift_group.attrs['description'] = 'Clock drift diagnostics for mic array synchronization'
+
+        self.timing_drift_initialized = True
+
+    def append_timing_drift_data(self, timing_drift_data):
+        """Append timing drift data to HDF5"""
+        if not self.mic_array_data or not timing_drift_data:
+            return
+
+        if not self.timing_drift_initialized:
+            self.initialize_timing_drift()
+
+        # Convert to numpy arrays
+        frame_counts = np.array([d['frame_count'] for d in timing_drift_data], dtype=np.int64)
+        drifts = np.array([d['drift'] for d in timing_drift_data], dtype=np.float64)
+        drift_means = np.array([d['drift_mean'] for d in timing_drift_data], dtype=np.float64)
+        drift_stds = np.array([d['drift_std'] for d in timing_drift_data], dtype=np.float64)
+        hw_timestamps = np.array([d['hw_timestamp'] for d in timing_drift_data], dtype=np.float64)
+        adc_timestamps = np.array([d['adc_timestamp'] for d in timing_drift_data], dtype=np.float64)
+        mic_timestamps = np.array([d['mic_timestamp'] for d in timing_drift_data], dtype=np.float64)
+        correction_factors = np.array([d['correction_factor'] for d in timing_drift_data], dtype=np.float64)
+
+        # Resize and append each dataset
+        old_size = self.timing_drift_datasets['frame_count'].shape[0]
+        new_size = old_size + len(frame_counts)
+
+        for key, arr in [
+            ('frame_count', frame_counts),
+            ('drift', drifts),
+            ('drift_mean', drift_means),
+            ('drift_std', drift_stds),
+            ('hw_timestamp', hw_timestamps),
+            ('adc_timestamp', adc_timestamps),
+            ('mic_timestamp', mic_timestamps),
+            ('correction_factor', correction_factors)
+        ]:
+            self.timing_drift_datasets[key].resize((new_size,))
+            self.timing_drift_datasets[key][old_size:new_size] = arr
 
     def append_mic_array_data(self, mic_array_blocks):
         """Append audio data blocks with per-sample timestamps to HDF5"""
@@ -591,6 +804,7 @@ class HDF5Logger:
         # Flush mic_array data if enabled
         if self.mic_array_data and mic_array is not None:
             self.append_mic_array_data(mic_array.pop_all_data())
+            self.append_timing_drift_data(mic_array.pop_all_timing_drift_data())
 
         # Write to disk
         self.file.flush()
@@ -645,6 +859,14 @@ class HDF5Logger:
             self.mic_array_group.attrs['total_blocks'] = self.total_mic_array_blocks
             self.mic_array_group.attrs['total_overflows'] = mic_array.overflows
             self.mic_array_group.attrs['device_name'] = str(sd.query_devices(mic_array.device_idx)['name']) if mic_array.device_idx is not None else 'Unknown'
+
+            # Add timing drift metadata if available
+            if self.timing_drift_initialized and 'timing_drift' in self.mic_array_group:
+                timing_drift_group = self.mic_array_group['timing_drift']
+                timing_drift_group.attrs['enable_resync'] = mic_array.enable_resync
+                timing_drift_group.attrs['resync_interval'] = mic_array.resync_interval
+                timing_drift_group.attrs['convergence_rate'] = mic_array.convergence_rate
+                timing_drift_group.attrs['drift_threshold'] = mic_array.drift_threshold
 
     def close(self):
         """Close HDF5 file"""
@@ -839,9 +1061,11 @@ def main():
     parser.add_argument('--mic-array-buffer-size', type=int, default=100000, help='Microphone array buffer size in blocks (default: 100000)')
     parser.add_argument('--data-logging', default=True, help='Enable data logging')
     parser.add_argument('--flush-interval', type=float, default=1.0, help='Data flush interval in seconds (default: 1.0)')
-    parser.add_argument('--output_folder', type=str, default=None, help='Output foldername (default: ~/TelemetryLogs/)')
+    parser.add_argument('--output_folder', type=str, default=None, help='Output foldername (default: ~/MMFDataLogs/)')
     parser.add_argument('--output_file', type=str, default=None, help='Output filename (default: auto-generated)')
+
     parser.add_argument('--enable_telemetry', type=bool, default=True, help='Enable telemetry signal monitoring')
+
     parser.add_argument('--baudrate', type=int, default=115200, help='Serial baudrate (default: 115200)')
     parser.add_argument('--buffer-size', type=int, default=10000, help='Telemetry buffer size per ESC (default: 10000)')
     parser.add_argument('--sample-rate-window', type=int, default=100, help='Sample rate calculation window (default: 100)')
