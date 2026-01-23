@@ -29,54 +29,225 @@ class Timer:
         return time.perf_counter() - self.start_time
 
 
-class GPIOTrigger:
-    """Monitor trigger signal with hardware interrupts"""
+class SignalMonitor:
+    """Unified GPIO signal monitor with PWM listening, output mirroring, heartbeat, and logging"""
 
-    def __init__(self, trigger_pin=17, timer=None, trigger_type='rising', buffer_size=10000, mode='signal', trigger_func=None,
-                 trigger_func_args=()):
-        #TODO: This whole class might not work here, because of interference between sounddevice and pigpio package!!!
+    def __init__(self, listen_pin=None, output_pin=None, log_pin=None,
+                 pwm_low_threshold=1400, pwm_high_threshold=1600,
+                 heartbeat=False, heartbeat_interval=10.0, heartbeat_start_duration=0.1,
+                 heartbeat_increment=0.1,
+                 timer=None, buffer_size=10000):
+        """
+        Initialize unified signal monitor
+
+        Args:
+            listen_pin: GPIO pin to listen to RC PWM signal (optional)
+            output_pin: GPIO pin to mirror state or generate heartbeat (optional)
+            log_pin: GPIO pin to log state changes (optional)
+            pwm_low_threshold: PWM pulse width threshold for LOW state (microseconds)
+            pwm_high_threshold: PWM pulse width threshold for HIGH state (microseconds)
+            heartbeat: Enable heartbeat mode when listen_pin is None
+            heartbeat_interval: Time between heartbeat pulses (seconds)
+            heartbeat_start_duration: Initial pulse duration (seconds)
+            heartbeat_increment: Increment for each heartbeat pulse (seconds)
+            timer: Shared Timer instance for logging
+            buffer_size: Maximum number of log events to keep in memory
+        """
         import pigpio
-        self.trigger_pin = trigger_pin
+
+        self.listen_pin = listen_pin
+        self.output_pin = output_pin
+        self.log_pin = log_pin
+        self.pwm_low_threshold = pwm_low_threshold
+        self.pwm_high_threshold = pwm_high_threshold
+        self.heartbeat = heartbeat
+        self.heartbeat_interval = heartbeat_interval
+        self.heartbeat_start_duration = heartbeat_start_duration
+        self.heartbeat_increment = heartbeat_increment
         self.timer = timer if timer else Timer()
-        self.trigger_events = deque(maxlen=buffer_size)
+
+        # State tracking
+        self.current_state = 0
+        self.last_rising_tick = None
+        self.last_pulse_width = 0
         self.lock = threading.Lock()
-        self.enabled = True
-        self.mode = mode
+
+        # Logging (edge detection)
+        self.log_events = deque(maxlen=buffer_size)
+        self.last_log_state = 0  # Track previous state for edge detection
+
+        # Heartbeat tracking
+        self.current_heartbeat_duration = heartbeat_start_duration
+        self.heartbeat_thread = None
+        self.running = False
+        self.measurement_started = False  # Heartbeat only starts when measurement begins
+
+        # Initialize pigpio
         self.pi = pigpio.pi()
+        if not self.pi.connected:
+            raise RuntimeError("Failed to connect to pigpio daemon")
 
-        self.pi.set_mode(self.trigger_pin, pigpio.INPUT)
-        self.pi.set_pull_up_down(self.trigger_pin, pigpio.PUD_DOWN)
+        # Configure listen pin
+        if self.listen_pin is not None:
+            self.pi.set_mode(self.listen_pin, pigpio.INPUT)
+            self.cb = self.pi.callback(self.listen_pin, pigpio.EITHER_EDGE, self._pwm_callback)
+        else:
+            self.cb = None
 
-        edge = dict(rising=pigpio.RISING_EDGE, falling=pigpio.FALLING_EDGE).get(trigger_type, pigpio.EITHER_EDGE)
+        # Configure output pin
+        if self.output_pin is not None:
+            self.pi.set_mode(self.output_pin, pigpio.OUTPUT)
+            self.pi.write(self.output_pin, 0)  # Start LOW
 
-        if mode == 'signal':
-            self.pi.callback(self.trigger_pin, edge, self.buffer_callback)
-        elif trigger_func is not None:
-            self.pi.callback(self.trigger_pin, edge, self.make_event_callback(trigger_func, trigger_func_args))
+        # Configure log pin
+        if self.log_pin is not None:
+            self.pi.set_mode(self.log_pin, pigpio.INPUT)
+            self.pi.set_pull_up_down(self.log_pin, pigpio.PUD_DOWN)
+            self.log_cb = self.pi.callback(self.log_pin, pigpio.EITHER_EDGE, self._log_callback)
+        else:
+            self.log_cb = None
 
-    def buffer_callback(self, gpio, level, tick):
-        """Called when trigger event occurs"""
+        # Start heartbeat if enabled
+        if self.heartbeat and self.listen_pin is None and self.output_pin is not None:
+            self.running = True
+            self.heartbeat_thread = threading.Thread(target=self._heartbeat_loop)
+            self.heartbeat_thread.daemon = True
+            self.heartbeat_thread.start()
+
+    def _pwm_callback(self, gpio, level, tick):
+        """Callback to measure PWM pulse width from incoming signal"""
+        if level == 1:  # Rising edge
+            self.last_rising_tick = tick
+        elif level == 0 and self.last_rising_tick is not None:  # Falling edge
+            import pigpio
+            pulse_width = pigpio.tickDiff(self.last_rising_tick, tick)
+
+            with self.lock:
+                self.last_pulse_width = pulse_width
+                old_state = self.current_state
+
+                # Apply hysteresis to prevent rapid toggling
+                if pulse_width < self.pwm_low_threshold:
+                    self.current_state = 0
+                elif pulse_width > self.pwm_high_threshold:
+                    self.current_state = 1
+
+                # Mirror state to output pin if configured and state changed
+                if self.output_pin is not None and self.current_state != old_state:
+                    self.pi.write(self.output_pin, self.current_state)
+
+            self.last_rising_tick = None
+
+    def _log_callback(self, gpio, level, tick):
+        """Callback to log rising/falling edges on log_pin
+
+        Logs 1 for rising edge (0→1) and -1 for falling edge (1→0)
+        """
         timestamp = self.timer.get_time()
-
         with self.lock:
-            self.trigger_events.append({
+            # Detect edge type
+            if level == 1 and self.last_log_state == 0:
+                # Rising edge
+                edge_value = 1
+            elif level == 0 and self.last_log_state == 1:
+                # Falling edge
+                edge_value = -1
+            else:
+                # No edge detected (shouldn't happen with EITHER_EDGE callback)
+                return
+
+            # Update last state
+            self.last_log_state = level
+
+            # Log the edge event
+            self.log_events.append({
                 'timestamp': timestamp,
-                'state': level
+                'state': edge_value
             })
 
-    def make_event_callback(self, func, func_args=()):
-        def event_callback(gpio, level, tick):
-            func(*func_args)
-        return event_callback
+    def _heartbeat_loop(self):
+        """Background thread for heartbeat generation with precise timing
 
-    def pop_all_triggers(self):
-        """Get and clear all triggers"""
+        Generates pulses with rising edges exactly heartbeat_interval apart.
+        Only starts after measurement_started is set to True.
+        """
+        # Wait until measurement starts
+        while self.running and not self.measurement_started:
+            time.sleep(0.1)
+
+        if not self.running:
+            return
+
+        # Initialize next pulse time
+        next_pulse_time = time.time()
+
+        while self.running:
+            # Wait until it's time for the next pulse
+            wait_time = next_pulse_time - time.time()
+            if wait_time > 0:
+                time.sleep(wait_time)
+
+            # Generate rising edge
+            if self.output_pin is not None and self.pi.connected:
+                self.pi.write(self.output_pin, 1)
+
+            # Wait for pulse duration
+            time.sleep(self.current_heartbeat_duration)
+
+            # Generate falling edge
+            if self.output_pin is not None and self.pi.connected:
+                self.pi.write(self.output_pin, 0)
+
+            # Schedule next pulse (exactly heartbeat_interval after this one)
+            next_pulse_time += self.heartbeat_interval
+
+            # Increment pulse duration for next heartbeat
+            self.current_heartbeat_duration += self.heartbeat_increment
+
+            # Check if next pulse would overlap with the following pulse
+            # If so, reset duration to avoid constant HIGH state
+            if time.time() + self.current_heartbeat_duration >= next_pulse_time:
+                self.current_heartbeat_duration = self.heartbeat_start_duration
+
+    def get_state(self):
+        """Get current state (for PWM listening mode)"""
         with self.lock:
-            events = list(self.trigger_events)
-            self.trigger_events.clear()
+            return self.current_state
+
+    def get_pulse_width(self):
+        """Get the last measured pulse width in microseconds"""
+        with self.lock:
+            return self.last_pulse_width
+
+    def pop_all_log_events(self):
+        """Get and clear all logged events"""
+        with self.lock:
+            events = list(self.log_events)
+            self.log_events.clear()
             return events
 
-    def cleanup(self):
+    def start_heartbeat(self):
+        """Start heartbeat generation (sets measurement_started flag)"""
+        self.measurement_started = True
+
+    def stop_heartbeat(self):
+        """Stop heartbeat generation and reset duration (clears measurement_started flag)"""
+        self.measurement_started = False
+        self.current_heartbeat_duration = self.heartbeat_start_duration
+
+    def close(self):
+        """Cleanup pigpio connection and threads"""
+        self.running = False
+
+        if self.heartbeat_thread:
+            self.heartbeat_thread.join(timeout=2.0)
+
+        if hasattr(self, 'cb') and self.cb:
+            self.cb.cancel()
+
+        if hasattr(self, 'log_cb') and self.log_cb:
+            self.log_cb.cancel()
+
         if hasattr(self, 'pi') and self.pi.connected:
             self.pi.stop()
 
@@ -98,7 +269,7 @@ def crc8_kiss(data):
 
 class ESCTelemtry:
     def __init__(self, port='/dev/ttyAMA0', baudrate=115200, esc_id='ESC1', timer=None,
-                 buffer_size=10000, sample_rate_window_len=100, pole_pair_count=14):
+                 buffer_size=10000, sample_rate_window_len=100, pole_count=24):
         """
         Initialize ESC Telemetry stream, using KISS telemetry protocol http://ultraesc.de/downloads/KISS_telemetry_protocol.pdf
 
@@ -121,7 +292,7 @@ class ESCTelemtry:
         self.invalid_packets = 0
         self.sample_times = deque(maxlen=sample_rate_window_len)
         self.telemetry_data = deque(maxlen=buffer_size)
-        self.pole_pair_count = pole_pair_count
+        self.pole_count = pole_count
         self.lock = threading.Lock()
         self.running = False
 
@@ -158,7 +329,7 @@ class ESCTelemtry:
         voltage = struct.unpack('>H', packet[1:3])[0] * 0.01
         current = struct.unpack('>H', packet[3:5])[0] * 0.01
         consumption = struct.unpack('>H', packet[5:7])[0]
-        rpm = struct.unpack('>H', packet[7:9])[0] * 100 * 2 / self.pole_pair_count
+        rpm = struct.unpack('>H', packet[7:9])[0] * 100 * 2 / self.pole_count
 
         return {
             'timestamp': timestamp,
@@ -555,7 +726,7 @@ class HDF5Logger:
         self.total_mic_array_blocks = 0
 
     def initialize_trigger(self):
-        """Initialize trigger datasets"""
+        """Initialize trigger datasets for edge detection logging"""
         if self.trigger_initialized or not self.trigger_data:
             return
 
@@ -567,6 +738,10 @@ class HDF5Logger:
                 'state', shape=(0,), maxshape=(None,), dtype=np.int8, compression='gzip'
             )
         }
+
+        # Add metadata explaining edge detection
+        self.trigger_group.attrs['description'] = 'Edge detection events from log_pin'
+        self.trigger_group.attrs['edge_encoding'] = '1 = rising edge (0→1), -1 = falling edge (1→0)'
 
         self.trigger_initialized = True
 
@@ -791,11 +966,11 @@ class HDF5Logger:
 
         self.total_esc_samples[esc_id] += len(data)
 
-    def flush_data(self, escs, trigger=None, mic_array=None):
+    def flush_data(self, escs, signal_monitor=None, mic_array=None):
         """Flush buffered data from all sources"""
-        # Flush trigger data if enabled
-        if self.trigger_data and trigger is not None:
-            self.append_trigger_data(trigger.pop_all_triggers())
+        # Flush signal monitor data if enabled
+        if self.trigger_data and signal_monitor is not None:
+            self.append_trigger_data(signal_monitor.pop_all_log_events())
 
         # Flush ESC data
         for esc in escs:
@@ -809,24 +984,24 @@ class HDF5Logger:
         # Write to disk
         self.file.flush()
 
-    def logging_thread_func(self, escs, trigger, mic_array):
+    def logging_thread_func(self, escs, signal_monitor, mic_array):
         """Background thread that periodically flushes data"""
         while self.running:
             time.sleep(self.flush_interval)
-            self.flush_data(escs, trigger, mic_array)
+            self.flush_data(escs, signal_monitor, mic_array)
 
-    def start_logging(self, escs, trigger, mic_array, timer):
+    def start_logging(self, escs, signal_monitor, mic_array, timer):
         """Start background logging thread"""
         # Save timing reference
         self.timing_group.attrs['start_time_wall'] = timer.start_time_wall
         self.timing_group.attrs['start_time_perf'] = timer.start_time
 
         self.running = True
-        self.log_thread = threading.Thread(target=self.logging_thread_func, args=(escs, trigger, mic_array))
+        self.log_thread = threading.Thread(target=self.logging_thread_func, args=(escs, signal_monitor, mic_array))
         self.log_thread.daemon = True
         self.log_thread.start()
 
-    def stop_logging(self, escs, trigger=None, mic_array=None):
+    def stop_logging(self, escs, signal_monitor=None, mic_array=None):
         """Stop logging and do final flush"""
         self.running = False
 
@@ -834,7 +1009,7 @@ class HDF5Logger:
             self.log_thread.join(timeout=2.0)
 
         # Final flush
-        self.flush_data(escs, trigger, mic_array)
+        self.flush_data(escs, signal_monitor, mic_array)
 
         # Update metadata
         for esc in escs:
@@ -891,18 +1066,28 @@ class DAQ:
                  baudrate=115200,
                  esc_buffer_size=10000,
                  sample_rate_window=100,
-                 # Trigger
-                 enable_trigger=False,
-                 trigger_pin=17,
-                 trigger_type='rising',
-                 trigger_buffer_size=10000,
+                 # Signal monitoring
+                 enable_signal_monitor=False,
+                 listen_pin=None,
+                 output_pin=None,
+                 log_pin=None,
+                 pwm_low_threshold=1400,
+                 pwm_high_threshold=1600,
+                 heartbeat=False,
+                 heartbeat_interval=10.0,
+                 heartbeat_start_duration=0.1,
+                 heartbeat_increment=0.1,
+                 signal_buffer_size=10000,
+                 # Control (for start/stop via RC switch)
+                 trigger_controlled=False,
+                 control_pin=None,
                  # Data logging
                  enable_logging=False,
                  log_folder=None,
                  log_filename=None,
                  flush_interval=1.0):
         """
-        Initialize data monitor with optional audio, ESC telemetry, and trigger monitoring
+        Initialize data monitor with optional audio, ESC telemetry, and signal monitoring
 
         Args:
             enable_mic_array: Enable audio monitoring (MCHStreamer)
@@ -915,10 +1100,21 @@ class DAQ:
             baudrate: Serial baudrate for all ESCs
             esc_buffer_size: Maximum number of telemetry samples per ESC to keep in memory
             sample_rate_window: Number of samples to use for rate calculation
-            enable_trigger: Enable trigger signal monitoring
-            trigger_pin: GPIO pin for trigger
-            trigger_type: 'rising', 'falling', or 'both'
-            trigger_buffer_size: Maximum number of trigger events to keep in memory
+            enable_signal_monitor: Enable signal monitoring (PWM listening, output mirroring, logging)
+            listen_pin: GPIO pin to listen to RC PWM signal (optional)
+            output_pin: GPIO pin to mirror state or generate heartbeat (optional)
+            log_pin: GPIO pin to log state changes (optional)
+            pwm_low_threshold: PWM pulse width threshold for LOW state in microseconds (default: 1400)
+            pwm_high_threshold: PWM pulse width threshold for HIGH state in microseconds (default: 1600)
+            heartbeat: Enable heartbeat mode when listen_pin is None
+            heartbeat_interval: Time between heartbeat pulses (seconds)
+            heartbeat_start_duration: Initial pulse duration (seconds)
+            heartbeat_increment: Increment for each heartbeat pulse (seconds)
+            signal_buffer_size: Maximum number of signal log events to keep in memory
+            trigger_controlled: Use RC PWM switch to control start/stop (gate mode)
+            control_pin: GPIO pin for control RC PWM signal
+            control_pwm_low_threshold: Control PWM threshold for LOW state in microseconds (default: 1400)
+            control_pwm_high_threshold: Control PWM threshold for HIGH state in microseconds (default: 1600)
             enable_logging: Enable data logging to HDF5
             log_folder: Output folder (None for default)
             log_filename: Output filename (None for auto-generated)
@@ -937,24 +1133,66 @@ class DAQ:
         self.escs = []
         if self.enable_esc:
             if esc_ports is None:
-                esc_ports = ['/dev/ttyAMA0', '/dev/ttyAMA2', '/dev/ttyAMA3', '/dev/ttyAMA4']
-            self.escs = [ESCTelemtry(port, baudrate, f'ESC{i + 1}', self.timer,
-                                     esc_buffer_size, sample_rate_window)
+                esc_ports = ['/dev/ttyAMA0', '/dev/ttyAMA4', '/dev/ttyAMA2', '/dev/ttyAMA3']
+            self.escs = [ESCTelemtry(port, baudrate, f'ESC{i + 1}', self.timer, esc_buffer_size, sample_rate_window)
                          for i, port in enumerate(esc_ports)]
 
-        # Trigger monitoring
-        self.enable_trigger = enable_trigger
-        self.trigger = GPIOTrigger(trigger_pin, self.timer, trigger_type, trigger_buffer_size) if self.enable_trigger else None
+        # Signal monitoring and control
+        self.enable_signal_monitor = enable_signal_monitor
+        self.trigger_controlled = trigger_controlled
+
+        # Control signal monitor for start/stop measurements (listens only, no logging)
+        self.control_monitor = SignalMonitor(
+            listen_pin=control_pin,
+            output_pin=None,
+            log_pin=None,
+            pwm_low_threshold=pwm_low_threshold,
+            pwm_high_threshold=pwm_high_threshold,
+            timer=self.timer
+        ) if self.trigger_controlled and control_pin is not None else None
+
+        log_pin = log_pin if self.enable_signal_monitor else None
+        # Only log signal events when signal monitor has log_pin configured
+        log_signal_data = self.enable_signal_monitor and log_pin is not None
+
+        # Signal monitor for listening, mirroring, and logging
+        self.signal_monitor = SignalMonitor(
+            listen_pin=listen_pin,
+            output_pin=output_pin,
+            log_pin=log_pin,
+            pwm_low_threshold=pwm_low_threshold,
+            pwm_high_threshold=pwm_high_threshold,
+            heartbeat=heartbeat,
+            heartbeat_interval=heartbeat_interval,
+            heartbeat_start_duration=heartbeat_start_duration,
+            heartbeat_increment=heartbeat_increment,
+            timer=self.timer,
+            buffer_size=signal_buffer_size
+        ) if self.enable_signal_monitor else None
 
         # Data logging
         self.enable_logging = enable_logging
-        self.logger = HDF5Logger(foldername=log_folder, filename=log_filename, flush_interval=flush_interval,
-                                 mic_array_data=self.enable_mic_array, trigger_data=self.enable_trigger,
-                                 esc_tel_data=self.enable_esc) \
-            if self.enable_logging else None
+        self.log_folder = log_folder
+        self.log_filename = log_filename
+        self.flush_interval = flush_interval
+
+
+        # In trigger-controlled mode, delay logger creation until recording starts
+        # In manual mode, create logger immediately
+        if self.enable_logging and not self.trigger_controlled:
+            self.logger = HDF5Logger(foldername=log_folder, filename=log_filename, flush_interval=flush_interval,
+                                     mic_array_data=self.enable_mic_array, trigger_data=log_signal_data,
+                                     esc_tel_data=self.enable_esc)
+        else:
+            self.logger = None
 
         self.threads = []
         self.running = False
+
+        # Recording state management for trigger-controlled mode
+        self.recording_state = 'idle'  # 'idle' or 'recording'
+        self.state_lock = threading.Lock()
+        self.trigger_monitor_thread = None
 
     def start(self):
         """Start all monitoring threads"""
@@ -963,7 +1201,7 @@ class DAQ:
         print("=" * 70)
         print(f"Audio: {self.enable_mic_array}")
         print(f"ESCs: {len(self.escs) if self.enable_esc else 0}")
-        print(f"Trigger: {self.enable_trigger}")
+        print(f"Signal Monitor: {self.enable_signal_monitor}")
         print(f"Logging: {self.enable_logging}")
         print("=" * 70 + "\n")
 
@@ -987,7 +1225,11 @@ class DAQ:
 
         # Start logging thread if enabled
         if self.enable_logging and self.logger:
-            self.logger.start_logging(self.escs, self.trigger, self.mic_array, self.timer)
+            self.logger.start_logging(self.escs, self.signal_monitor, self.mic_array, self.timer)
+
+        # Start heartbeat if signal monitor is enabled
+        if self.signal_monitor:
+            self.signal_monitor.start_heartbeat()
 
         self.running = True
         print("Monitoring started")
@@ -1013,58 +1255,252 @@ class DAQ:
 
         # Stop logging if enabled
         if self.enable_logging and self.logger:
-            self.logger.stop_logging(self.escs, self.trigger, self.mic_array)
+            self.logger.stop_logging(self.escs, self.signal_monitor, self.mic_array)
             self.logger.close()
 
-        # Cleanup trigger
-        if self.trigger:
-            self.trigger.cleanup()
+        # Stop heartbeat and cleanup signal monitors
+        if self.signal_monitor:
+            self.signal_monitor.stop_heartbeat()
+            self.signal_monitor.close()
+        if self.control_monitor:
+            self.control_monitor.close()
 
         self.running = False
 
     def get_esc_latest_sample(self):
         return [esc.get_latest_sample() for esc in self.escs]
 
-    def run(self):
-        """
-        Run monitoring with telemetry display
-        Args:
-            display_interval: How often to update telemetry display (seconds)
-        """
-        self.start()
+    def _trigger_monitor_thread_func(self):
+        """Monitor RC switch and control recording state (gate mode)"""
+        last_state = 0
 
+        while self.running:
+            if not self.control_monitor:
+                time.sleep(0.01)
+                continue
+
+            # Poll current RC switch state
+            current_state = self.control_monitor.get_state()
+
+            # Rising edge - start recording
+            if current_state == 1 and last_state == 0:
+                with self.state_lock:
+                    if self.recording_state == 'idle':
+                        timestamp = self.timer.get_time()
+                        print(f"\n[RC SWITCH] HIGH detected at {timestamp:.3f}s - Starting recording...")
+                        self._start_recording()
+
+            # Falling edge - stop recording
+            elif current_state == 0 and last_state == 1:
+                with self.state_lock:
+                    if self.recording_state == 'recording':
+                        timestamp = self.timer.get_time()
+                        print(f"\n[RC SWITCH] LOW detected at {timestamp:.3f}s - Stopping recording...")
+                        self._stop_recording()
+
+            last_state = current_state
+            time.sleep(0.01)  # 10ms polling interval
+
+    def _start_recording(self):
+        """Start recording (audio + ESC telemetry + logging)"""
+        if self.recording_state == 'recording':
+            return  # Already recording
+
+        # Create logger if not already created (trigger-controlled mode)
+        if self.enable_logging and self.logger is None:
+            log_signal_data = self.enable_signal_monitor and self.signal_monitor is not None and self.signal_monitor.log_pin is not None
+            self.logger = HDF5Logger(
+                foldername=self.log_folder,
+                filename=self.log_filename,
+                flush_interval=self.flush_interval,
+                mic_array_data=self.enable_mic_array,
+                trigger_data=log_signal_data,
+                esc_tel_data=self.enable_esc
+            )
+
+        # Start audio if enabled
+        if self.enable_mic_array and self.mic_array:
+            try:
+                self.mic_array.start()
+                print(f"  MicArray started (device: {sd.query_devices(self.mic_array.device_idx)['name']})")
+            except RuntimeError as e:
+                print(f"  WARNING: MicArray failed to start: {e}")
+                self.enable_mic_array = False
+                self.mic_array = None
+
+        # Start ESC monitoring threads
+        if self.enable_esc:
+            for esc in self.escs:
+                thread = threading.Thread(target=esc.monitor_thread)
+                thread.daemon = True
+                thread.start()
+                self.threads.append(thread)
+            print(f"  ESC telemetry started ({len(self.escs)} ESCs)")
+
+        # Start logging thread if enabled
+        if self.enable_logging and self.logger:
+            self.logger.start_logging(self.escs, self.signal_monitor, self.mic_array, self.timer)
+            print(f"  HDF5 logging started: {self.logger.filename}")
+
+        # Start heartbeat if signal monitor is enabled
+        if self.signal_monitor:
+            self.signal_monitor.start_heartbeat()
+
+        self.recording_state = 'recording'
+        print("  Recording ACTIVE\n")
+
+    def _stop_recording(self):
+        """Stop recording (audio + ESC telemetry + logging)"""
+        if self.recording_state == 'idle':
+            return  # Already stopped
+
+        # Stop ESC threads
+        for esc in self.escs:
+            esc.stop()
+
+        # Wait for threads
+        for thread in self.threads:
+            thread.join(timeout=1.0)
+        self.threads.clear()
+
+        # Stop audio if enabled
+        if self.mic_array:
+            self.mic_array.stop()
+            print("  MicArray stopped")
+
+        # Stop logging if enabled
+        if self.enable_logging and self.logger:
+            self.logger.stop_logging(self.escs, self.signal_monitor, self.mic_array)
+            self.logger.close()
+            print(f"  HDF5 file saved: {self.logger.filename}")
+            # Reset logger - will be created fresh at next recording session
+            self.logger = None
+
+        # Stop heartbeat (resets duration for next measurement)
+        if self.signal_monitor:
+            self.signal_monitor.stop_heartbeat()
+
+        self.recording_state = 'idle'
+        print("  Recording STOPPED\n")
+
+    def run(self):
+        """Run monitoring - behavior depends on trigger_controlled mode"""
+        if self.trigger_controlled:
+            self._run_trigger_controlled()
+        else:
+            self._run_manual()
+
+    def _run_manual(self):
+        """Run in manual mode (current behavior)"""
+        self.start()
         print("Press Ctrl+C to stop\n")
 
         try:
             while True:
                 time.sleep(0.1)
-
         except KeyboardInterrupt:
             pass
         finally:
             self.stop()
+
+    def _run_trigger_controlled(self):
+        """Run in trigger-controlled mode (gate mode)"""
+        if not self.control_monitor:
+            print("ERROR: Trigger-controlled mode requires control monitor")
+            return
+
+        print("\n" + "=" * 70)
+        print("RC SWITCH CONTROLLED MODE (Gate Mode)")
+        print("=" * 70)
+        print(f"MicArray: {self.enable_mic_array}")
+        print(f"ESCs: {len(self.escs) if self.enable_esc else 0}")
+        print(f"Control Pin: {self.control_monitor.listen_pin}")
+        print(f"PWM Thresholds: LOW < {self.control_monitor.pwm_low_threshold} μs, HIGH > {self.control_monitor.pwm_high_threshold} μs")
+        print(f"Signal Monitor: {self.enable_signal_monitor}")
+        print(f"Logging: {self.enable_logging}")
+        print("=" * 70)
+        print("\nWaiting for RC switch signal...")
+        print("  HIGH (>1600 μs) = Start recording")
+        print("  LOW  (<1400 μs) = Stop recording")
+        print("\nPress Ctrl+C to exit\n")
+
+        # Set running flag
+        self.running = True
+
+        # Start RC switch monitoring thread
+        if self.control_monitor:
+            self.trigger_monitor_thread = threading.Thread(target=self._trigger_monitor_thread_func)
+            self.trigger_monitor_thread.daemon = True
+            self.trigger_monitor_thread.start()
+
+        try:
+            while True:
+                time.sleep(0.1)
+        except KeyboardInterrupt:
+            print("\n\nShutdown requested...")
+        finally:
+            # Stop recording if active
+            with self.state_lock:
+                if self.recording_state == 'recording':
+                    print("Stopping active recording...")
+                    self._stop_recording()
+
+            # Cleanup
+            self.running = False
+            if self.trigger_monitor_thread:
+                self.trigger_monitor_thread.join(timeout=2.0)
+            if self.control_monitor:
+                self.control_monitor.close()
+
+            print("Shutdown complete.")
 
 
 def main():
     import argparse
 
     # Parse command line arguments
-    parser = argparse.ArgumentParser(description='Data Monitor/Recorder for 16ch MicArray, ESC Telemetry and Trigger')
-    parser.add_argument('--enable-trigger', default=False, help='Enable trigger signal monitoring')
-    parser.add_argument('--trigger-pin', type=int, default=17, help='GPIO pin for trigger signal (default: 17)')
-    parser.add_argument('--trigger-type', choices=['rising', 'falling', 'both'],
-                        default='rising', help='Trigger edge type (default: rising)')
-    parser.add_argument('--enable-mic-array', action='store_true', default=True, help='Enable microphone array monitoring (MCHStreamer)')
+    parser = argparse.ArgumentParser(description='Data Monitor/Recorder for 16ch MicArray, ESC Telemetry and Signal Monitoring')
+
+    # Signal monitoring arguments
+    parser.add_argument('--enable-signal-monitor', action='store_true', default=True,
+                        help='Enable signal monitoring (PWM listening, output mirroring, logging)')
+    parser.add_argument('--listen-pin', type=int, default=None,
+                        help='GPIO pin to listen to RC PWM signal (default: None)')
+    parser.add_argument('--output-pin', type=int, default=22,
+                        help='GPIO pin to mirror state or generate heartbeat (default: 22)')
+    parser.add_argument('--log-pin', type=int, default=23,
+                        help='GPIO pin to log state changes (default: 23)')
+    parser.add_argument('--pwm-low-threshold', type=int, default=1400,
+                        help='PWM pulse width threshold for LOW state in microseconds (default: 1400)')
+    parser.add_argument('--pwm-high-threshold', type=int, default=1600,
+                        help='PWM pulse width threshold for HIGH state in microseconds (default: 1600)')
+    parser.add_argument('--heartbeat', action='store_true', default=True,
+                        help='Enable heartbeat mode when listen-pin is not provided')
+    parser.add_argument('--heartbeat-interval', type=float, default=10.0,
+                        help='Time between heartbeat pulses in seconds (default: 10.0)')
+    parser.add_argument('--heartbeat-start-duration', type=float, default=0.1,
+                        help='Initial heartbeat pulse duration in seconds (default: 0.1)')
+    parser.add_argument('--heartbeat-increment', type=float, default=0.1,
+                        help='Heartbeat duration increment in seconds (default: 0.1)')
+    parser.add_argument('--signal-buffer-size', type=int, default=10000,
+                        help='Signal monitor buffer size (default: 10000)')
+
+    # Control arguments
+    parser.add_argument('--trigger-controlled', action='store_true', default=True,
+                        help='Use RC PWM switch to control start/stop (gate mode: HIGH=record, LOW=stop)')
+    parser.add_argument('--control-pin', type=int, default=17,
+                        help='GPIO pin for control RC PWM signal (default: 17)')
+    parser.add_argument('--disable-mic-array', action='store_true', default=True, help='Disable microphone array monitoring (MCHStreamer)')
     parser.add_argument('--mic-array-channels', type=int, default=16, help='Number of microphone channels (default: 16)')
     parser.add_argument('--mic-array-sample-rate', type=int, default=48000, help='Microphone array sample rate in Hz (default: 48000)')
     parser.add_argument('--mic-array-blocksize', type=int, default=1024, help='Microphone array blocksize (default: 1024)')
     parser.add_argument('--mic-array-buffer-size', type=int, default=100000, help='Microphone array buffer size in blocks (default: 100000)')
-    parser.add_argument('--data-logging', default=True, help='Enable data logging')
+    parser.add_argument('--disable-data-logging', action='store_true', default=False, help='Disable data logging')
     parser.add_argument('--flush-interval', type=float, default=1.0, help='Data flush interval in seconds (default: 1.0)')
     parser.add_argument('--output_folder', type=str, default=None, help='Output foldername (default: ~/MMFDataLogs/)')
     parser.add_argument('--output_file', type=str, default=None, help='Output filename (default: auto-generated)')
 
-    parser.add_argument('--enable_telemetry', type=bool, default=True, help='Enable telemetry signal monitoring')
+    parser.add_argument('--disable_telemetry', action='store_true', default=False, help='Disable telemetry signal monitoring')
 
     parser.add_argument('--baudrate', type=int, default=115200, help='Serial baudrate (default: 115200)')
     parser.add_argument('--buffer-size', type=int, default=10000, help='Telemetry buffer size per ESC (default: 10000)')
@@ -1075,20 +1511,34 @@ def main():
     output_folder = f'/home/{getpass.getuser()}/MMFDataLogs/' if args.output_folder is None else args.output_folder
 
     daq = DAQ(
-        enable_mic_array=args.enable_mic_array,
+        # Audio
+        enable_mic_array=not args.disable_mic_array,
         mic_array_channels=args.mic_array_channels,
         mic_array_sample_rate=args.mic_array_sample_rate,
         mic_array_blocksize=args.mic_array_blocksize,
         mic_array_buffer_size=args.mic_array_buffer_size,
-        enable_telemetry=args.enable_telemetry,
+        # ESC telemetry
+        enable_telemetry=not args.disable_telemetry,
         baudrate=args.baudrate,
         esc_buffer_size=args.buffer_size,
         sample_rate_window=args.sample_rate_window,
-        enable_trigger=args.enable_trigger,
-        trigger_pin=args.trigger_pin,
-        trigger_type=args.trigger_type,
-        trigger_buffer_size=args.trigger_buffer_size,
-        enable_logging=args.data_logging,
+        # Signal monitoring
+        enable_signal_monitor=args.enable_signal_monitor,
+        listen_pin=args.listen_pin,
+        output_pin=args.output_pin,
+        log_pin=args.log_pin,
+        pwm_low_threshold=args.pwm_low_threshold,
+        pwm_high_threshold=args.pwm_high_threshold,
+        heartbeat=args.heartbeat,
+        heartbeat_interval=args.heartbeat_interval,
+        heartbeat_start_duration=args.heartbeat_start_duration,
+        heartbeat_increment=args.heartbeat_increment,
+        signal_buffer_size=args.signal_buffer_size,
+        # Control
+        trigger_controlled=args.trigger_controlled,
+        control_pin=args.control_pin,
+        # Logging
+        enable_logging=not args.disable_data_logging,
         log_folder=output_folder,
         log_filename=args.output_file,
         flush_interval=args.flush_interval

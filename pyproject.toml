@@ -4,8 +4,18 @@ version = "0.1.0"
 description = "Git repo for all things code related to the DFG Project 'Fliegendes Messmikrofon' (working title: MaryMicFly)"
 requires-python = ">=3.13"
 dependencies = [
+    "acoular>=24.11",
     "h5py>=3.15.1",
+    "ipython==9.6.0",
+    "matplotlib==3.10.7",
     "numpy>=2.3.4",
+    "pandas>=2.2.0",
+    "paramiko==4.0.0",
     "pigpio==1.78",
+    "plotly>=5.24.0",
     "pyserial>=3.5",
+    "pyyaml==6.0.3",
+    "scipy==1.16.3",
+    "sounddevice>=0.5.3",
+    "soundfile==0.13.1",
 ]
