@@ -13,6 +13,7 @@ class InputConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     audio_h5: str
     mic_geom_xml: str
+    ground_truth_h5: str | None = None
 
 
 class SegmentConfig(BaseModel):
@@ -94,13 +95,56 @@ class NotchStageConfig(NotchConfig):
     kind: Literal["notch"]
 
 
+class CsmConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    nperseg: int = Field(default=512, ge=64)
+    noverlap: int = Field(default=256, ge=0)
+    window: str = "hann"
+    diag_loading_rel: float = 1e-6
+    f_min_hz: float = 200.0
+    f_max_hz: float = 6000.0
+
+
+class DiagnosticGridConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    extent_xy_m: float = 0.5
+    increment_m: float = 0.02
+    z_m: float | None = None
+
+
+class BandConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str
+    f_min_hz: float
+    f_max_hz: float
+
+    @model_validator(mode="after")
+    def _check_range(self) -> "BandConfig":
+        if self.f_max_hz <= self.f_min_hz:
+            raise ValueError("f_max_hz must be > f_min_hz")
+        return self
+
+
+class CleanScConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    damp: float = 0.6
+    n_iter: int = Field(default=100, ge=1)
+
+
 class ArrayFilterStageConfig(BaseModel):
-    # NOTE: placeholder until Task 19. extra="allow" is intentional during the
-    # transition so Task 4 can shape-check stages-list YAMLs that already carry
-    # an array_filter block. Task 19 MUST switch to extra="forbid" once the
-    # full body lands — otherwise typos in YAML will be silently ignored.
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="forbid")
     kind: Literal["array_filter"]
+    algorithm: Literal["clean_sc"] = "clean_sc"
+    csm: CsmConfig = Field(default_factory=CsmConfig)
+    diagnostic_grid: DiagnosticGridConfig = Field(default_factory=DiagnosticGridConfig)
+    bands: list[BandConfig] = Field(default_factory=lambda: [
+        BandConfig(name="low", f_min_hz=200.0, f_max_hz=500.0),
+        BandConfig(name="mid", f_min_hz=500.0, f_max_hz=2000.0),
+        BandConfig(name="high", f_min_hz=2000.0, f_max_hz=6000.0),
+    ])
+    target_point_m: tuple[float, float, float] = (0.0, 0.0, -1.5)
+    rotor_z_tolerance_m: float = 0.05
+    clean_sc: CleanScConfig = Field(default_factory=CleanScConfig)
 
 
 StageConfig = Annotated[

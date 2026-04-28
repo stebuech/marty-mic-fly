@@ -137,3 +137,34 @@ def test_app_config_rejects_old_top_level_notch():
     with pytest.raises(ValidationError) as exc:
         AppConfig.model_validate(payload)
     assert "notch" in str(exc.value).lower()
+
+
+def test_array_filter_stage_config_full_payload():
+    from martymicfly.config import ArrayFilterStageConfig
+    payload = {
+        "kind": "array_filter",
+        "algorithm": "clean_sc",
+        "csm": {"nperseg": 512, "noverlap": 256, "window": "hann",
+                "diag_loading_rel": 1e-6, "f_min_hz": 200.0, "f_max_hz": 6000.0},
+        "diagnostic_grid": {"extent_xy_m": 0.5, "increment_m": 0.02, "z_m": None},
+        "bands": [
+            {"name": "low", "f_min_hz": 200.0, "f_max_hz": 500.0},
+            {"name": "mid", "f_min_hz": 500.0, "f_max_hz": 2000.0},
+        ],
+        "target_point_m": [0.0, 0.0, -1.5],
+        "rotor_z_tolerance_m": 0.05,
+        "clean_sc": {"damp": 0.6, "n_iter": 100},
+    }
+    cfg = ArrayFilterStageConfig.model_validate(payload)
+    assert cfg.kind == "array_filter"
+    assert cfg.algorithm == "clean_sc"
+    assert cfg.target_point_m == (0.0, 0.0, -1.5)
+    assert cfg.bands[0].name == "low"
+
+
+def test_array_filter_stage_config_unknown_algorithm_rejected():
+    import pytest
+    from pydantic import ValidationError
+    from martymicfly.config import ArrayFilterStageConfig
+    with pytest.raises(ValidationError):
+        ArrayFilterStageConfig.model_validate({"kind": "array_filter", "algorithm": "nope"})
