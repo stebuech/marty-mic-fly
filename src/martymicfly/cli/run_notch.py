@@ -29,6 +29,11 @@ from martymicfly.processing.pipeline import PipelineContext, run_pipeline
 
 log = logging.getLogger("martymicfly.run_notch")
 
+# Default config path — repo-root/configs/example_notch.yaml. Resolved from this
+# file's location so calling main() from a Python console (without argv) works.
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+DEFAULT_CONFIG = _REPO_ROOT / "configs" / "example_notch.yaml"
+
 
 def _select_segment(cfg, n_total: int, fs: float) -> tuple[float, int]:
     mode = cfg.segment.mode
@@ -104,7 +109,8 @@ def _write_metrics(metrics: dict, json_path: Path, csv_path: Path) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description="Run AP2-A stage 1 (notch) pipeline.")
-    p.add_argument("--config", required=True, type=Path)
+    p.add_argument("--config", type=Path, default=DEFAULT_CONFIG,
+                   help=f"YAML config path. Default: {DEFAULT_CONFIG}")
     p.add_argument("--output-dir", type=Path, default=None,
                    help="Override output.dir from the YAML config.")
     p.add_argument("--log-level", default="INFO",
