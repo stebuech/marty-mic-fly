@@ -51,10 +51,21 @@ def load_synth_h5(path: str | Path) -> dict:
                     )
                 rpm_per_esc[esc_name] = {"rpm": rpm, "timestamp": ts}
 
+        platform = None
+        if "platform" in f:
+            plat = f["platform"]
+            platform = {
+                "n_rotors": int(plat.attrs["n_rotors"]),
+                "rotor_positions": np.asarray(plat["rotor_positions"][...], dtype=np.float64),
+                "rotor_radii": np.asarray(plat["rotor_radii"][...], dtype=np.float64),
+                "blade_counts": np.asarray(plat["blade_counts"][...], dtype=np.int32),
+            }
+
     duration = time_data.shape[0] / sample_rate
     return {
         "time_data": time_data,
         "sample_rate": sample_rate,
         "rpm_per_esc": rpm_per_esc,
         "duration": duration,
+        "platform": platform,
     }

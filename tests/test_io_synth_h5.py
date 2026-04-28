@@ -13,7 +13,7 @@ FIXTURE = Path(__file__).parent / "fixtures" / "tiny_synth.h5"
 
 def test_load_returns_expected_keys():
     out = load_synth_h5(FIXTURE)
-    assert set(out.keys()) == {"time_data", "sample_rate", "rpm_per_esc", "duration"}
+    assert set(out.keys()) == {"time_data", "sample_rate", "rpm_per_esc", "duration", "platform"}
 
 
 def test_load_shape_and_dtype():
@@ -56,3 +56,43 @@ def test_load_non_monotonic_timestamps_raises(tmp_path):
         grp.create_dataset("timestamp", data=np.array([0.0, 0.0]))  # not monotonic
     with pytest.raises(ValueError, match="monoton"):
         load_synth_h5(bad)
+
+
+def test_load_synth_h5_includes_platform_when_present(tmp_path):
+    import h5py, numpy as np
+    p = tmp_path / "with_plat.h5"
+    with h5py.File(p, "w") as f:
+        f.attrs["sample_freq"] = 16000.0
+        td = f.create_dataset("time_data", data=np.zeros((1600, 4), dtype=np.float64))
+        td.attrs["sample_freq"] = 16000.0
+        plat = f.create_group("platform")
+        plat.attrs["n_rotors"] = 2
+        plat["rotor_positions"] = np.array([[0.15, -0.15], [0, 0], [0, 0]], dtype=np.float64)
+        plat["rotor_radii"] = np.array([0.10, 0.10])
+        plat["blade_counts"] = np.array([2, 2], dtype=np.int32)
+        rpm = f.create_group("esc_telemetry")
+        for name in ("ESC1", "ESC2"):
+            g = rpm.create_group(name)
+            g["rpm"] = np.full(5, 3000.0)
+            g["timestamp"] = np.linspace(0, 0.1, 5)
+    from martymicfly.io.synth_h5 import load_synth_h5
+    res = load_synth_h5(str(p))
+    assert res["platform"] is not None
+    assert res["platform"]["n_rotors"] == 2
+    assert res["platform"]["rotor_positions"].shape == (3, 2)
+
+
+def test_load_synth_h5_platform_is_none_when_absent(tmp_path):
+    import h5py, numpy as np
+    p = tmp_path / "no_plat.h5"
+    with h5py.File(p, "w") as f:
+        f.attrs["sample_freq"] = 16000.0
+        td = f.create_dataset("time_data", data=np.zeros((1600, 4), dtype=np.float64))
+        td.attrs["sample_freq"] = 16000.0
+        rpm = f.create_group("esc_telemetry")
+        g = rpm.create_group("ESC1")
+        g["rpm"] = np.full(5, 3000.0)
+        g["timestamp"] = np.linspace(0, 0.1, 5)
+    from martymicfly.io.synth_h5 import load_synth_h5
+    res = load_synth_h5(str(p))
+    assert res["platform"] is None
