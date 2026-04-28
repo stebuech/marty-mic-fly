@@ -242,4 +242,8 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    _rc = main()
+    # Only raise SystemExit on failure — keeps IPython/PyCharm runfile() console
+    # clean on success (rc=0 would otherwise trigger an exit warning).
+    if _rc:
+        raise SystemExit(_rc)
