@@ -78,3 +78,24 @@ def test_compose_external_drone_plus_external_equals_mix(tmp_path):
     with h5py.File(out_synth, "r") as f:
         mix = np.asarray(f["time_data"][...])
     np.testing.assert_allclose(mix, drone_only + ext_only, atol=1e-9)
+
+
+def test_compose_external_synth_loads_via_load_synth_h5(tmp_path):
+    """Round-trip: synth file produced by compose_external is consumable by load_synth_h5."""
+    from martymicfly.synth.compose_external import compose_external
+    from martymicfly.synth.external_source import ExternalSourceSpec
+    from martymicfly.io.synth_h5 import load_synth_h5
+    art = tmp_path / "art.h5"
+    geom = tmp_path / "g.xml"
+    out_synth = tmp_path / "mix.h5"
+    out_gt = tmp_path / "gt.h5"
+    _write_artifact(art)
+    _write_geom_xml(geom, [(0.3, 0.0, 0.0), (-0.3, 0.0, 0.0)])
+    spec = ExternalSourceSpec(kind="noise", position_m=(0.5, 0.0, -0.5), seed=0)
+    compose_external(str(art), str(geom), spec, str(out_synth), str(out_gt))
+
+    res = load_synth_h5(str(out_synth))
+    assert res["sample_rate"] == 16000.0
+    assert res["time_data"].shape == (1600, 2)
+    assert res["platform"] is not None
+    assert res["platform"]["n_rotors"] == 2

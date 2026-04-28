@@ -34,6 +34,11 @@ def _propagate_external_only(
     mic_pos = load_mic_geom_xml(mic_geom_path)
     n_samples = art.subsource_signals.shape[1] if spec.duration_s is None \
         else int(round(spec.duration_s * art.sample_rate))
+    if n_samples > art.subsource_signals.shape[1]:
+        raise ValueError(
+            f"duration_s={spec.duration_s}s requires {n_samples} samples, "
+            f"but artifact only has {art.subsource_signals.shape[1]}"
+        )
     ext = generate_external_signal(spec, art.sample_rate, n_samples)
     pos = np.array([list(spec.position_m)], dtype=np.float64)
     return greens_propagate(ext.reshape(1, -1), pos, mic_pos, art.sample_rate)
@@ -51,6 +56,11 @@ def compose_external(
     mic_pos = load_mic_geom_xml(mic_geom_path)
     n_samples = art.subsource_signals.shape[1] if ext_spec.duration_s is None \
         else int(round(ext_spec.duration_s * art.sample_rate))
+    if n_samples > art.subsource_signals.shape[1]:
+        raise ValueError(
+            f"duration_s={ext_spec.duration_s}s requires {n_samples} samples, "
+            f"but artifact only has {art.subsource_signals.shape[1]}"
+        )
 
     drone_at_mics = greens_propagate(
         art.subsource_signals[:, :n_samples],
@@ -74,9 +84,9 @@ def compose_external(
     out_synth = Path(out_synth_path)
     out_synth.parent.mkdir(parents=True, exist_ok=True)
     with h5py.File(out_synth, "w") as f:
-        f.attrs["sample_freq"] = float(art.sample_rate)
         f.attrs["composed_by"] = "martymicfly.synth.compose_external"
-        f["time_data"] = mix
+        td = f.create_dataset("time_data", data=mix)
+        td.attrs["sample_freq"] = float(art.sample_rate)
         plat = f.create_group("platform")
         plat.attrs["n_rotors"] = int(art.rotor_positions.shape[1])
         plat["rotor_positions"] = art.rotor_positions
@@ -98,9 +108,9 @@ def compose_external(
     out_gt = Path(out_gt_path)
     out_gt.parent.mkdir(parents=True, exist_ok=True)
     with h5py.File(out_gt, "w") as f:
-        f.attrs["sample_freq"] = float(art.sample_rate)
         f.attrs["kind"] = "external_only"
-        f["time_data"] = ext_signal.reshape(-1, 1)
+        td = f.create_dataset("time_data", data=ext_signal.reshape(-1, 1))
+        td.attrs["sample_freq"] = float(art.sample_rate)
         ext_g = f.create_group("external")
         ext_g.attrs["kind"] = ext_spec.kind
         ext_g.attrs["amplitude_db"] = float(ext_spec.amplitude_db)
