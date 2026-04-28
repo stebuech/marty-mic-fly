@@ -34,6 +34,15 @@
 
 ## Task 1: Cleanup Notch-Altcode aus `analysis/`
 
+> **Deviation (2026-04-28, user-approved):** Beim Ausführen wurde zusätzlich
+> die Funktion `apply_mimo_iir_filter()` (~140 Zeilen) aus
+> `analysis/data_loader.py` entfernt — sie importierte intern aus den
+> gelöschten Modulen und war dadurch sofort tot. Streng nach Spec §1.4
+> sollte `data_loader.py` „unangetastet" bleiben; pragmatisch wäre die
+> einzige Alternative gewesen, toten Code mit kaputten Imports zu
+> restaurieren. User hat die Abweichung explizit akzeptiert. Die übrigen
+> Funktionen in `data_loader.py` bleiben unverändert.
+
 **Files:**
 - Remove: `analysis/mimo_adaptive_iir_filter.py`
 - Remove: `analysis/mimo_filter_analysis.py`
