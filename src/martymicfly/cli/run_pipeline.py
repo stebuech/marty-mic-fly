@@ -101,8 +101,7 @@ def _notch_pole_repr(stages_cfg) -> str:
             pr = s.pole_radius
             if pr.mode == "scalar":
                 return f"scalar:{pr.value:.4f}"
-            # Defensive: should be unreachable today.
-            return f"linear:k={pr.k_cover},margin={pr.margin_hz}"
+            raise AssertionError("unreachable: linear-mode rejected by _build_notch_stage")
     return ""
 
 
@@ -113,12 +112,108 @@ def _notch_stage_cfg(stages_cfg):
     return None
 
 
+def _resolve_run_dir(out_template: str, run_id: str) -> Path:
+    """Resolve the per-run output directory.
+
+    If out_template contains '{run_id}', it is substituted in place
+    (preserving any prior structure around it). If not, the run is
+    auto-nested as out_template / run_id so multiple runs against the same
+    static directory don't collide.
+    """
+    if "{run_id}" in out_template:
+        return Path(out_template.replace("{run_id}", run_id))
+    return Path(out_template) / run_id
+
+
+def _emit_notch_outputs(
+    *,
+    ctx: PipelineContext,
+    cfg: AppConfig,
+    stages_cfg,
+    out_dir: Path,
+    run_id: str,
+    config_hash: str,
+    seg_start_s: float,
+    n_seg: int,
+) -> None:
+    """Write notch-stage outputs (metrics.json, metrics.csv, plots, filtered.h5)
+    to out_dir. Idempotent given identical inputs. Reads ctx.metadata['pre_notch']
+    set by NotchStage.process()."""
+    notch_cfg = _notch_stage_cfg(stages_cfg)
+    # NotchStage rejects linear mode at build time → scalar float only here.
+    pole_radius = float(notch_cfg.pole_radius.value)
+    pole_repr = _notch_pole_repr(stages_cfg)
+
+    fs = ctx.sample_rate
+    signal = ctx.time_data
+    per_motor_bpf = ctx.per_motor_bpf
+
+    # 5. Metrics
+    channels = _resolve_channels(cfg, signal.shape[1])
+    fmax = _resolve_fmax(cfg, per_motor_bpf, cfg.rotor.n_harmonics, fs)
+    metrics = compute_metrics(
+        pre=ctx.metadata["pre_notch"], post=ctx.time_data,
+        fs=fs, per_motor_bpf=per_motor_bpf,
+        n_harmonics=cfg.rotor.n_harmonics, pole_radius=pole_radius,
+        channels=channels,
+        welch_nperseg=cfg.metrics.welch_nperseg,
+        welch_noverlap=cfg.metrics.welch_noverlap,
+        bandwidth_factor=cfg.metrics.bandwidth_factor,
+        broadband_low_hz=cfg.metrics.broadband_low_hz,
+        fmax_hz=fmax,
+    )
+    metrics.update({
+        "run_id": run_id,
+        "config_hash": config_hash,
+        "input_h5": str(cfg.input.audio_h5),
+        "segment": {"start_s": seg_start_s, "duration_s": n_seg / fs},
+    })
+    _write_metrics(metrics, out_dir / cfg.output.metrics_json,
+                   out_dir / cfg.output.metrics_csv)
+
+    # 6. Plots
+    if cfg.plots.enabled:
+        plot_channels = _resolve_plot_channels(cfg, channels)
+        plots_dir = out_dir / cfg.output.plots_subdir
+        plots_dir.mkdir(parents=True, exist_ok=True)
+        for ch in plot_channels:
+            plot_channel_html(
+                pre=ctx.metadata["pre_notch"], post=ctx.time_data,
+                fs=fs, per_motor_bpf=per_motor_bpf,
+                channel=ch, outpath=plots_dir / f"ch{ch:02d}.html",
+                n_harmonics=cfg.rotor.n_harmonics, fmax_hz=fmax,
+                spectrogram_window=cfg.plots.spectrogram_window,
+                spectrogram_overlap=cfg.plots.spectrogram_overlap,
+            )
+
+    # 7. Filtered HDF5
+    write_filtered(
+        out_path=out_dir / cfg.output.filtered_h5,
+        filtered_time_data=ctx.time_data,
+        sample_rate=fs,
+        rpm_per_esc=ctx.rpm_per_esc,
+        attrs={
+            "martymicfly_version": "0.1.0",
+            "input_h5": str(cfg.input.audio_h5),
+            "config_hash": config_hash,
+            "segment_start_s": float(seg_start_s),
+            "segment_duration_s": float(n_seg / fs),
+            "n_blades": int(cfg.rotor.n_blades),
+            "n_harmonics": int(cfg.rotor.n_harmonics),
+            "notch_mode": "rpm_external_zerophase",
+            "pole_radius_repr": pole_repr,
+        },
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description="Run martymicfly pipeline (stages-list YAML).")
     p.add_argument("--config", type=Path, default=DEFAULT_CONFIG,
                    help=f"YAML config path. Default: {DEFAULT_CONFIG}")
     p.add_argument("--output-dir", type=Path, default=None,
-                   help="Override output.dir from the YAML config.")
+                   help="Override output.dir from config. If the resulting template "
+                        "contains {run_id} it is substituted; otherwise the run "
+                        "auto-nests under <dir>/<run_id>.")
     p.add_argument("--log-level", default="INFO",
                    choices=["DEBUG", "INFO", "WARNING", "ERROR"])
     args = p.parse_args(argv)
@@ -132,14 +227,9 @@ def main(argv: list[str] | None = None) -> int:
     config_hash = cfg.config_hash()
     run_id = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S") + "_" + config_hash
     out_template = str(args.output_dir) if args.output_dir is not None else cfg.output.dir
-    if "{run_id}" in out_template:
-        run_dir = Path(out_template.replace("{run_id}", run_id))
-    else:
-        # No template placeholder → nest the run under the given dir so multiple
-        # runs into the same output root don't clobber each other.
-        run_dir = Path(out_template) / run_id
-    run_dir.mkdir(parents=True, exist_ok=True)
-    log.info("run_id=%s, output=%s", run_id, run_dir)
+    out_dir = _resolve_run_dir(out_template, run_id)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    log.info("run_id=%s, output=%s", run_id, out_dir)
 
     # 1. Load
     src = load_synth_h5(cfg.input.audio_h5)
@@ -179,74 +269,23 @@ def main(argv: list[str] | None = None) -> int:
 
     # 5–7. Notch-stage outputs (preserved verbatim from run_notch.py)
     if any(s.name == "notch" for s in stages):
-        notch_cfg = _notch_stage_cfg(cfg.stages)
-        # NotchStage rejects linear mode at build time → scalar float only here.
-        pole_radius = float(notch_cfg.pole_radius.value)
-        pole_repr = _notch_pole_repr(cfg.stages)
-
-        # 5. Metrics
-        channels = _resolve_channels(cfg, signal.shape[1])
-        fmax = _resolve_fmax(cfg, per_motor_bpf, cfg.rotor.n_harmonics, src["sample_rate"])
-        metrics = compute_metrics(
-            pre=ctx.metadata["pre_notch"], post=ctx.time_data,
-            fs=src["sample_rate"], per_motor_bpf=per_motor_bpf,
-            n_harmonics=cfg.rotor.n_harmonics, pole_radius=pole_radius,
-            channels=channels,
-            welch_nperseg=cfg.metrics.welch_nperseg,
-            welch_noverlap=cfg.metrics.welch_noverlap,
-            bandwidth_factor=cfg.metrics.bandwidth_factor,
-            broadband_low_hz=cfg.metrics.broadband_low_hz,
-            fmax_hz=fmax,
-        )
-        metrics.update({
-            "run_id": run_id,
-            "config_hash": config_hash,
-            "input_h5": str(cfg.input.audio_h5),
-            "segment": {"start_s": seg_start_s, "duration_s": n_seg / src["sample_rate"]},
-        })
-        _write_metrics(metrics, run_dir / cfg.output.metrics_json,
-                       run_dir / cfg.output.metrics_csv)
-
-        # 6. Plots
-        if cfg.plots.enabled:
-            plot_channels = _resolve_plot_channels(cfg, channels)
-            plots_dir = run_dir / cfg.output.plots_subdir
-            plots_dir.mkdir(parents=True, exist_ok=True)
-            for ch in plot_channels:
-                plot_channel_html(
-                    pre=ctx.metadata["pre_notch"], post=ctx.time_data,
-                    fs=src["sample_rate"], per_motor_bpf=per_motor_bpf,
-                    channel=ch, outpath=plots_dir / f"ch{ch:02d}.html",
-                    n_harmonics=cfg.rotor.n_harmonics, fmax_hz=fmax,
-                    spectrogram_window=cfg.plots.spectrogram_window,
-                    spectrogram_overlap=cfg.plots.spectrogram_overlap,
-                )
-
-        # 7. Filtered HDF5
-        write_filtered(
-            out_path=run_dir / cfg.output.filtered_h5,
-            filtered_time_data=ctx.time_data,
-            sample_rate=src["sample_rate"],
-            rpm_per_esc=src["rpm_per_esc"],
-            attrs={
-                "martymicfly_version": "0.1.0",
-                "input_h5": str(cfg.input.audio_h5),
-                "config_hash": config_hash,
-                "segment_start_s": float(seg_start_s),
-                "segment_duration_s": float(n_seg / src["sample_rate"]),
-                "n_blades": int(cfg.rotor.n_blades),
-                "n_harmonics": int(cfg.rotor.n_harmonics),
-                "notch_mode": "rpm_external_zerophase",
-                "pole_radius_repr": pole_repr,
-            },
+        _emit_notch_outputs(
+            ctx=ctx,
+            cfg=cfg,
+            stages_cfg=cfg.stages,
+            out_dir=out_dir,
+            run_id=run_id,
+            config_hash=cfg.config_hash(),
+            seg_start_s=seg_start_s,
+            n_seg=n_seg,
         )
 
     # 8. Snapshot config
     if cfg.output.copy_config:
-        shutil.copy(args.config, run_dir / "config.yaml")
-        (run_dir / "config.hash").write_text(config_hash + "\n", encoding="utf-8")
+        shutil.copy(args.config, out_dir / "config.yaml")
+        (out_dir / "config.hash").write_text(config_hash + "\n", encoding="utf-8")
 
-    log.info("done. outputs in %s", run_dir)
+    log.info("done. outputs in %s", out_dir)
     return 0
 
 
