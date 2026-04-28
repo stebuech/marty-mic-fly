@@ -1,0 +1,42 @@
+input:
+  audio_h5: /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/ap2a_synthesis_16mic_gaptip.h5
+  mic_geom_xml: /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/mic_geom.xml
+
+segment:
+  mode: middle
+  duration: 10.0
+
+channels:
+  selection: all
+
+rotor:
+  n_blades: 2
+  n_harmonics: 20
+
+notch:
+  pole_radius:
+    mode: scalar
+    value: 0.9994
+  multichannel: false
+  block_size: 4096
+
+metrics:
+  welch_nperseg: 8192
+  welch_noverlap: 4096
+  bandwidth_factor: 1.0
+  broadband_low_hz: null
+
+plots:
+  enabled: true
+  fmax_hz: null
+  spectrogram_window: 4096
+  spectrogram_overlap: 2048
+  channel_subset: null
+
+output:
+  dir: results/notch/{run_id}
+  filtered_h5: filtered.h5
+  metrics_json: metrics.json
+  metrics_csv: metrics.csv
+  plots_subdir: plots
+  copy_config: true

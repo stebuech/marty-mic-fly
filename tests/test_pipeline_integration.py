@@ -1,0 +1,85 @@
+"""End-to-end: tiny fixture → CLI → outputs."""
+
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+import yaml
+
+
+REPO = Path(__file__).resolve().parents[1]
+FIXTURE_H5 = REPO / "tests" / "fixtures" / "tiny_synth.h5"
+FIXTURE_XML = REPO / "tests" / "fixtures" / "tiny_geom.xml"
+
+
+def _config_for_fixture(out_dir: Path) -> dict:
+    return {
+        "input": {
+            "audio_h5": str(FIXTURE_H5),
+            "mic_geom_xml": str(FIXTURE_XML),
+        },
+        "segment": {"mode": "middle", "duration": 0.5},
+        "channels": {"selection": "all"},
+        "rotor": {"n_blades": 2, "n_harmonics": 5},
+        "notch": {
+            "pole_radius": {"mode": "scalar", "value": 0.998},
+            "multichannel": False,
+            "block_size": 4096,
+        },
+        "metrics": {
+            "welch_nperseg": 2048,
+            "welch_noverlap": 1024,
+            "bandwidth_factor": 1.0,
+            "broadband_low_hz": None,
+        },
+        "plots": {
+            "enabled": True,
+            "fmax_hz": 2000.0,
+            "spectrogram_window": 1024,
+            "spectrogram_overlap": 512,
+            "channel_subset": [0, 1],
+        },
+        "output": {
+            "dir": str(out_dir / "{run_id}"),
+            "filtered_h5": "filtered.h5",
+            "metrics_json": "metrics.json",
+            "metrics_csv": "metrics.csv",
+            "plots_subdir": "plots",
+            "copy_config": True,
+        },
+    }
+
+
+def test_end_to_end_on_tiny_fixture(tmp_path: Path):
+    cfg = _config_for_fixture(tmp_path)
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text(yaml.safe_dump(cfg), encoding="utf-8")
+
+    result = subprocess.run(
+        [sys.executable, "-m", "martymicfly.cli.run_notch",
+         "--config", str(cfg_path)],
+        capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 0, (
+        f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+
+    runs = list(tmp_path.glob("*"))
+    run_dirs = [p for p in runs if p.is_dir()]
+    assert len(run_dirs) == 1
+    run_dir = run_dirs[0]
+
+    assert (run_dir / "filtered.h5").exists()
+    assert (run_dir / "metrics.json").exists()
+    assert (run_dir / "metrics.csv").exists()
+    assert (run_dir / "config.yaml").exists()
+    plots = list((run_dir / "plots").glob("ch*.html"))
+    assert len(plots) == 2  # channel_subset
+
+    metrics = json.loads((run_dir / "metrics.json").read_text())
+    assert metrics["n_motors"] == 2
+    assert metrics["n_harmonics"] == 5
+    # Tonal reduction at the seeded harmonics should be substantial
+    for ch in metrics["channels"]:
+        assert ch["tonal_reduction_db"] > 15.0, ch
