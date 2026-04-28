@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import List, Literal, Optional
+from typing import Annotated, List, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -87,6 +87,27 @@ class NotchConfig(BaseModel):
     block_size: int = Field(default=4096, ge=64)
 
 
+class NotchStageConfig(NotchConfig):
+    """NotchConfig fields + a `kind` discriminator for the stages list."""
+
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["notch"]
+
+
+# Placeholder for Stage 2 — full body added in Task 19. We add a stub here so
+# the discriminated union works; field defaults are validated when the stage
+# entry is present.
+class ArrayFilterStageConfig(BaseModel):
+    model_config = ConfigDict(extra="allow")  # filled in Task 19
+    kind: Literal["array_filter"]
+
+
+StageConfig = Annotated[
+    Union[NotchStageConfig, ArrayFilterStageConfig],
+    Field(discriminator="kind"),
+]
+
+
 class MetricsConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     welch_nperseg: int = Field(ge=64)
@@ -120,7 +141,7 @@ class AppConfig(BaseModel):
     segment: SegmentConfig
     channels: ChannelsConfig
     rotor: RotorConfig
-    notch: NotchConfig
+    stages: list[StageConfig]
     metrics: MetricsConfig
     plots: PlotsConfig
     output: OutputConfig

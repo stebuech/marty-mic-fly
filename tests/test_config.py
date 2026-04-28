@@ -12,11 +12,14 @@ def _minimal_config_dict():
         "segment": {"mode": "middle", "duration": 10.0},
         "channels": {"selection": "all"},
         "rotor": {"n_blades": 2, "n_harmonics": 20},
-        "notch": {
-            "pole_radius": {"mode": "scalar", "value": 0.9994},
-            "multichannel": False,
-            "block_size": 4096,
-        },
+        "stages": [
+            {
+                "kind": "notch",
+                "pole_radius": {"mode": "scalar", "value": 0.9994},
+                "multichannel": False,
+                "block_size": 4096,
+            }
+        ],
         "metrics": {
             "welch_nperseg": 8192,
             "welch_noverlap": 4096,
@@ -44,8 +47,9 @@ def _minimal_config_dict():
 def test_minimal_config_validates():
     cfg = AppConfig(**_minimal_config_dict())
     assert cfg.rotor.n_blades == 2
-    assert cfg.notch.pole_radius.mode == "scalar"
-    assert cfg.notch.pole_radius.value == pytest.approx(0.9994)
+    assert cfg.stages[0].kind == "notch"
+    assert cfg.stages[0].pole_radius.mode == "scalar"
+    assert cfg.stages[0].pole_radius.value == pytest.approx(0.9994)
 
 
 def test_segment_explicit_requires_start_end():
@@ -57,14 +61,14 @@ def test_segment_explicit_requires_start_end():
 
 def test_pole_radius_linear_requires_k_cover_and_margin():
     d = _minimal_config_dict()
-    d["notch"]["pole_radius"] = {"mode": "linear"}
+    d["stages"][0]["pole_radius"] = {"mode": "linear"}
     with pytest.raises(ValidationError):
         AppConfig(**d)
 
 
 def test_pole_radius_linear_full():
     d = _minimal_config_dict()
-    d["notch"]["pole_radius"] = {
+    d["stages"][0]["pole_radius"] = {
         "mode": "linear",
         "k_cover": 1.5,
         "margin_hz": 5.0,
@@ -73,7 +77,7 @@ def test_pole_radius_linear_full():
         "r_max": 0.9995,
     }
     cfg = AppConfig(**d)
-    assert cfg.notch.pole_radius.k_cover == pytest.approx(1.5)
+    assert cfg.stages[0].pole_radius.k_cover == pytest.approx(1.5)
 
 
 def test_channels_list_requires_list_field():
@@ -89,3 +93,45 @@ def test_config_hash_is_deterministic():
     cfg2 = AppConfig(**d)
     assert cfg1.config_hash() == cfg2.config_hash()
     assert len(cfg1.config_hash()) == 8
+
+
+def test_app_config_with_notch_stage():
+    from martymicfly.config import AppConfig
+    payload = {
+        "input": {"audio_h5": "/x.h5", "mic_geom_xml": "/x.xml"},
+        "segment": {"mode": "middle", "duration": 10.0},
+        "channels": {"selection": "all"},
+        "rotor": {"n_blades": 2, "n_harmonics": 13},
+        "stages": [
+            {
+                "kind": "notch",
+                "pole_radius": {"mode": "scalar", "value": 0.9994},
+                "multichannel": False,
+                "block_size": 4096,
+            }
+        ],
+        "metrics": {"welch_nperseg": 4096, "welch_noverlap": 2048},
+        "plots": {"enabled": True, "spectrogram_window": 4096, "spectrogram_overlap": 2048},
+        "output": {"dir": "results/notch/{run_id}"},
+    }
+    cfg = AppConfig.model_validate(payload)
+    assert cfg.stages[0].kind == "notch"
+    assert cfg.stages[0].pole_radius.value == 0.9994
+
+
+def test_app_config_rejects_old_top_level_notch():
+    import pytest
+    from pydantic import ValidationError
+    from martymicfly.config import AppConfig
+    payload = {
+        "input": {"audio_h5": "/x.h5", "mic_geom_xml": "/x.xml"},
+        "segment": {"mode": "middle", "duration": 10.0},
+        "channels": {"selection": "all"},
+        "rotor": {"n_blades": 2, "n_harmonics": 13},
+        "notch": {"pole_radius": {"mode": "scalar", "value": 0.9994}},
+        "metrics": {"welch_nperseg": 4096, "welch_noverlap": 2048},
+        "plots": {"enabled": True, "spectrogram_window": 4096, "spectrogram_overlap": 2048},
+        "output": {"dir": "results/notch/{run_id}"},
+    }
+    with pytest.raises(ValidationError):
+        AppConfig.model_validate(payload)
