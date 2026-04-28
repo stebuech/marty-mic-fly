@@ -128,10 +128,12 @@ def test_app_config_rejects_old_top_level_notch():
         "segment": {"mode": "middle", "duration": 10.0},
         "channels": {"selection": "all"},
         "rotor": {"n_blades": 2, "n_harmonics": 13},
+        "stages": [],
         "notch": {"pole_radius": {"mode": "scalar", "value": 0.9994}},
         "metrics": {"welch_nperseg": 4096, "welch_noverlap": 2048},
         "plots": {"enabled": True, "spectrogram_window": 4096, "spectrogram_overlap": 2048},
         "output": {"dir": "results/notch/{run_id}"},
     }
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError) as exc:
         AppConfig.model_validate(payload)
+    assert "notch" in str(exc.value).lower()

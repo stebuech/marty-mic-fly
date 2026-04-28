@@ -12,7 +12,7 @@ from .sources import ArrayFreqSource, ArraySamplesGenerator
 
 
 @dataclass
-class NotchStageConfig:
+class NotchStageParams:
     n_blades: int
     n_harmonics: int
     pole_radius: float | np.ndarray
@@ -25,7 +25,7 @@ class NotchStage:
 
     name = "notch"
 
-    def __init__(self, cfg: NotchStageConfig) -> None:
+    def __init__(self, cfg: NotchStageParams) -> None:
         self.cfg = cfg
 
     def process(self, ctx: PipelineContext) -> PipelineContext:

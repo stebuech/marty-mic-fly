@@ -7,7 +7,7 @@ from martymicfly.processing.frequencies import (
     build_harmonic_matrix,
     interpolate_per_motor_bpf,
 )
-from martymicfly.processing.notch import NotchStage, NotchStageConfig
+from martymicfly.processing.notch import NotchStage, NotchStageParams
 from martymicfly.processing.pipeline import PipelineContext
 
 
@@ -56,7 +56,7 @@ def test_notchstage_suppresses_pure_tone():
     signal = np.sin(2 * np.pi * bpf * t)[:, None]  # (N, 1)
 
     ctx = _build_ctx(signal, fs, rpm, n_harmonics=5)
-    stage = NotchStage(NotchStageConfig(
+    stage = NotchStage(NotchStageParams(
         n_blades=2, n_harmonics=5, pole_radius=0.998,
         multichannel=False, block_size=4096,
     ))
@@ -72,7 +72,7 @@ def test_notchstage_preserves_pre_signal_in_metadata():
     n = int(0.5 * fs)
     signal = np.random.default_rng(0).standard_normal((n, 1))
     ctx = _build_ctx(signal, fs, rpm=3000.0, n_harmonics=2)
-    stage = NotchStage(NotchStageConfig(
+    stage = NotchStage(NotchStageParams(
         n_blades=2, n_harmonics=2, pole_radius=0.99,
         multichannel=False, block_size=4096,
     ))
@@ -90,7 +90,7 @@ def test_notchstage_per_channel_loop_handles_multichannel_input():
     for c in range(3):
         signal[:, c] += np.sin(2 * np.pi * bpf * t)
     ctx = _build_ctx(signal, fs, rpm=3000.0, n_harmonics=3)
-    stage = NotchStage(NotchStageConfig(
+    stage = NotchStage(NotchStageParams(
         n_blades=2, n_harmonics=3, pole_radius=0.998,
         multichannel=False, block_size=4096,
     ))

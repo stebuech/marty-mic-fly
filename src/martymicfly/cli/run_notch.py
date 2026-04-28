@@ -24,7 +24,7 @@ from martymicfly.processing.frequencies import (
     interpolate_per_motor_bpf,
     linear_r_schedule,
 )
-from martymicfly.processing.notch import NotchStage, NotchStageConfig
+from martymicfly.processing.notch import NotchStage, NotchStageParams
 from martymicfly.processing.pipeline import PipelineContext, run_pipeline
 
 log = logging.getLogger("martymicfly.run_notch")
@@ -166,7 +166,7 @@ def main(argv: list[str] | None = None) -> int:
         harm_matrix=harm_matrix,
         metadata={},
     )
-    notch_stage = NotchStage(NotchStageConfig(
+    notch_stage = NotchStage(NotchStageParams(
         n_blades=cfg.rotor.n_blades,
         n_harmonics=cfg.rotor.n_harmonics,
         pole_radius=pole_radius,

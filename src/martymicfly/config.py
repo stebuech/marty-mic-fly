@@ -94,11 +94,12 @@ class NotchStageConfig(NotchConfig):
     kind: Literal["notch"]
 
 
-# Placeholder for Stage 2 — full body added in Task 19. We add a stub here so
-# the discriminated union works; field defaults are validated when the stage
-# entry is present.
 class ArrayFilterStageConfig(BaseModel):
-    model_config = ConfigDict(extra="allow")  # filled in Task 19
+    # NOTE: placeholder until Task 19. extra="allow" is intentional during the
+    # transition so Task 4 can shape-check stages-list YAMLs that already carry
+    # an array_filter block. Task 19 MUST switch to extra="forbid" once the
+    # full body lands — otherwise typos in YAML will be silently ignored.
+    model_config = ConfigDict(extra="allow")
     kind: Literal["array_filter"]
 
 
