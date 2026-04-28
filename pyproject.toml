@@ -18,7 +18,7 @@ dependencies = [
     "pydantic>=2",
     "pyserial>=3.5",
     "pyyaml==6.0.3",
-    "scipy>=1.15,!=1.16.0,!=1.16.1,!=1.16.2,!=1.16.3",
+    "scipy>=1.15.3",
     "scipy-stubs>=1.15.3",
     "sounddevice>=0.5.3",
     "soundfile==0.13.1",
@@ -31,13 +31,6 @@ drone-synthdata = { path = "../drone_synthdata", editable = true }
 [dependency-groups]
 dev = [
     "pytest>=9.0.3",
-]
-
-[tool.uv]
-override-dependencies = [
-    "acoular==26.1",
-    "ipython>=9.12",
-    "scipy-stubs>=1.17.1",
 ]
 
 [build-system]

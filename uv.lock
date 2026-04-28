@@ -7,13 +7,6 @@ resolution-markers = [
     "sys_platform != 'emscripten' and sys_platform != 'win32'",
 ]
 
-[manifest]
-overrides = [
-    { name = "acoular", specifier = "==26.1" },
-    { name = "ipython", specifier = ">=9.12" },
-    { name = "scipy-stubs", specifier = ">=1.17.1" },
-]
-
 [[package]]
 name = "acoular"
 version = "26.1"
@@ -535,7 +528,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2" },
     { name = "pyserial", specifier = ">=3.5" },
     { name = "pyyaml", specifier = "==6.0.3" },
-    { name = "scipy", specifier = ">=1.15,!=1.16.0,!=1.16.1,!=1.16.2,!=1.16.3" },
+    { name = "scipy", specifier = ">=1.15.3" },
     { name = "scipy-stubs", specifier = ">=1.15.3" },
     { name = "sounddevice", specifier = ">=0.5.3" },
     { name = "soundfile", specifier = "==0.13.1" },
@@ -660,17 +653,17 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "acoular", specifier = "==25.10" },
+    { name = "acoular", specifier = ">=25.10" },
     { name = "h5py", specifier = ">=3.15.1" },
-    { name = "ipython", specifier = "==9.10.0" },
-    { name = "matplotlib", specifier = "==3.10.8" },
+    { name = "ipython", specifier = ">=9.10" },
+    { name = "matplotlib", specifier = ">=3.10.8" },
     { name = "numba", specifier = ">=0.60" },
-    { name = "numpy", specifier = "==2.3.5" },
+    { name = "numpy", specifier = ">=2.3.5" },
     { name = "pandas", specifier = ">=3.0.0" },
     { name = "plotly", specifier = ">=6.7.0" },
     { name = "pyyaml", specifier = ">=6.0.3" },
-    { name = "scipy-stubs", specifier = "~=1.15.3" },
-    { name = "tornado", specifier = "==6.5.4" },
+    { name = "scipy-stubs", specifier = ">=1.15.3" },
+    { name = "tornado", specifier = ">=6.5.4" },
     { name = "traits-stubs", specifier = ">=6.4.0" },
 ]
 
