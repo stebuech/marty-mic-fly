@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<MicArray name="tiny_4mic">
+  <pos Name="Point 1" x="0.1" y="0.0" z="0.0"/>
+  <pos Name="Point 2" x="0.0" y="0.1" z="0.0"/>
+  <pos Name="Point 3" x="-0.1" y="0.0" z="0.0"/>
+  <pos Name="Point 4" x="0.0" y="-0.1" z="0.0"/>
+</MicArray>
