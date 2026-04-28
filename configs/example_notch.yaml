@@ -11,18 +11,19 @@ channels:
 
 rotor:
   n_blades: 2
-  n_harmonics: 20
+  n_harmonics: 13
 
-notch:
-  pole_radius:
-    mode: scalar
-    value: 0.9994
-  multichannel: false
-  block_size: 4096
+stages:
+  - kind: notch
+    pole_radius:
+      mode: scalar
+      value: 0.9996
+    multichannel: false
+    block_size: 4096
 
 metrics:
-  welch_nperseg: 8192
-  welch_noverlap: 4096
+  welch_nperseg: 4096
+  welch_noverlap: 2048
   bandwidth_factor: 1.0
   broadband_low_hz: null
 

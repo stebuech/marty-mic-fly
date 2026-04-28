@@ -22,11 +22,14 @@ def _config_for_fixture(out_dir: Path) -> dict:
         "segment": {"mode": "middle", "duration": 0.5},
         "channels": {"selection": "all"},
         "rotor": {"n_blades": 2, "n_harmonics": 5},
-        "notch": {
-            "pole_radius": {"mode": "scalar", "value": 0.998},
-            "multichannel": False,
-            "block_size": 4096,
-        },
+        "stages": [
+            {
+                "kind": "notch",
+                "pole_radius": {"mode": "scalar", "value": 0.998},
+                "multichannel": False,
+                "block_size": 4096,
+            },
+        ],
         "metrics": {
             "welch_nperseg": 2048,
             "welch_noverlap": 1024,
@@ -83,3 +86,33 @@ def test_end_to_end_on_tiny_fixture(tmp_path: Path):
     # Tonal reduction at the seeded harmonics should be substantial
     for ch in metrics["channels"]:
         assert ch["tonal_reduction_db"] > 15.0, ch
+
+
+def test_run_pipeline_cli_with_stages_list(tmp_path):
+    """The new CLI accepts the stages-list YAML and runs notch only."""
+    from pathlib import Path
+    fixtures = Path("tests/fixtures")
+    cfg_yaml = tmp_path / "cfg.yaml"
+    cfg_yaml.write_text(f"""
+input:
+  audio_h5: {fixtures / 'tiny_synth.h5'}
+  mic_geom_xml: {fixtures / 'tiny_geom.xml'}
+segment: {{mode: head, duration: 0.5}}
+channels: {{selection: all}}
+rotor: {{n_blades: 2, n_harmonics: 4}}
+stages:
+  - kind: notch
+    pole_radius: {{mode: scalar, value: 0.99}}
+    multichannel: false
+    block_size: 1024
+metrics: {{welch_nperseg: 1024, welch_noverlap: 512}}
+plots: {{enabled: false, spectrogram_window: 512, spectrogram_overlap: 256}}
+output: {{dir: {tmp_path / 'out'}}}
+""")
+    from martymicfly.cli.run_pipeline import main
+    rc = main(["--config", str(cfg_yaml)])
+    assert rc == 0
+    out_dirs = list((tmp_path / "out").glob("*"))
+    assert len(out_dirs) == 1
+    assert (out_dirs[0] / "filtered.h5").exists()
+    assert (out_dirs[0] / "metrics.json").exists()
