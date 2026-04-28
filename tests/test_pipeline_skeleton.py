@@ -45,3 +45,16 @@ def test_run_pipeline_empty_stage_list_is_identity():
     ctx_in = _empty_ctx()
     ctx_out = run_pipeline([], ctx_in)
     assert ctx_out is ctx_in
+
+
+def test_stage_registry_builds_notch_stage():
+    from martymicfly.config import NotchStageConfig, PoleRadiusConfig
+    from martymicfly.processing.pipeline import build_stage
+    cfg = NotchStageConfig(
+        kind="notch",
+        pole_radius=PoleRadiusConfig(mode="scalar", value=0.9994),
+        multichannel=False,
+        block_size=4096,
+    )
+    stage = build_stage(cfg)
+    assert stage.name == "notch"

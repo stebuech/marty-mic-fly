@@ -67,3 +67,38 @@ class NotchStage:
             freq_source=ArrayFreqSource(harm_matrix),
         )
         return np.vstack(list(cascade.result(self.cfg.block_size)))
+
+
+from martymicfly.processing.pipeline import register_stage_builder
+
+
+def _build_notch_stage(cfg) -> "NotchStage":
+    """Translate a pydantic NotchStageConfig into the runtime NotchStageParams
+    and instantiate the NotchStage. Called by the stage registry.
+
+    Note: the pydantic NotchStageConfig does not carry n_blades / n_harmonics
+    (those live on RotorConfig and are wired in by run_pipeline.py in Task 4).
+    We seed sensible placeholders here; the CLI is expected to override them
+    before invoking process(), or to construct NotchStageParams directly.
+    Likewise pole_radius arrives as a PoleRadiusConfig: scalar mode is resolved
+    here; linear mode is left for Task 19's resolver and falls back to r_max.
+    """
+    pr_cfg = cfg.pole_radius
+    if pr_cfg.mode == "scalar":
+        pole_radius: float = float(pr_cfg.value)
+    else:
+        # Linear mode resolution requires per-harmonic BPF info not yet in
+        # scope. Fall back to r_max so the stage instantiates; Task 19 will
+        # replace this with a proper resolver.
+        pole_radius = float(pr_cfg.r_max)
+
+    return NotchStage(NotchStageParams(
+        n_blades=1,
+        n_harmonics=1,
+        pole_radius=pole_radius,
+        multichannel=cfg.multichannel,
+        block_size=cfg.block_size,
+    ))
+
+
+register_stage_builder("notch", _build_notch_stage)
