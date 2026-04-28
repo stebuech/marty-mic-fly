@@ -7,7 +7,7 @@ from dataclasses import dataclass, replace
 import numpy as np
 from notchfilter.cascade import CascadeNotchFilter
 
-from .pipeline import PipelineContext
+from .pipeline import PipelineContext, register_stage_builder
 from .sources import ArrayFreqSource, ArraySamplesGenerator
 
 
@@ -69,32 +69,29 @@ class NotchStage:
         return np.vstack(list(cascade.result(self.cfg.block_size)))
 
 
-from martymicfly.processing.pipeline import register_stage_builder
+def _build_notch_stage(cfg, *, rotor=None, **_) -> "NotchStage":
+    """Translate a pydantic NotchStageConfig (YAML stage entry) plus the
+    top-level rotor block into a runtime NotchStage. The rotor block carries
+    n_blades and n_harmonics, which the YAML stage entry does not."""
+    if rotor is None:
+        raise ValueError(
+            "_build_notch_stage requires rotor=RotorConfig(...) — pass it via "
+            "build_pipeline(cfg.stages, rotor=cfg.rotor) at the CLI boundary"
+        )
 
-
-def _build_notch_stage(cfg) -> "NotchStage":
-    """Translate a pydantic NotchStageConfig into the runtime NotchStageParams
-    and instantiate the NotchStage. Called by the stage registry.
-
-    Note: the pydantic NotchStageConfig does not carry n_blades / n_harmonics
-    (those live on RotorConfig and are wired in by run_pipeline.py in Task 4).
-    We seed sensible placeholders here; the CLI is expected to override them
-    before invoking process(), or to construct NotchStageParams directly.
-    Likewise pole_radius arrives as a PoleRadiusConfig: scalar mode is resolved
-    here; linear mode is left for Task 19's resolver and falls back to r_max.
-    """
-    pr_cfg = cfg.pole_radius
-    if pr_cfg.mode == "scalar":
-        pole_radius: float = float(pr_cfg.value)
-    else:
-        # Linear mode resolution requires per-harmonic BPF info not yet in
-        # scope. Fall back to r_max so the stage instantiates; Task 19 will
-        # replace this with a proper resolver.
-        pole_radius = float(pr_cfg.r_max)
+    if cfg.pole_radius.mode == "scalar":
+        pole_radius = float(cfg.pole_radius.value)
+    else:  # 'linear'
+        raise NotImplementedError(
+            "pole_radius.mode='linear' is not resolvable at stage-construction time "
+            "because the per-harmonic schedule depends on runtime per_motor_bpf. "
+            "Use mode='scalar' until linear-mode deferred resolution lands "
+            "(see plan Task 19 / handoff)."
+        )
 
     return NotchStage(NotchStageParams(
-        n_blades=1,
-        n_harmonics=1,
+        n_blades=rotor.n_blades,
+        n_harmonics=rotor.n_harmonics,
         pole_radius=pole_radius,
         multichannel=cfg.multichannel,
         block_size=cfg.block_size,

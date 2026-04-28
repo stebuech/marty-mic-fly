@@ -43,21 +43,27 @@ def run_pipeline(stages: list[Stage], ctx: PipelineContext) -> PipelineContext:
     return ctx
 
 
-_STAGE_BUILDERS: dict[str, Callable[[object], "Stage"]] = {}
+_STAGE_BUILDERS: dict[str, Callable[..., "Stage"]] = {}
 
 
-def register_stage_builder(kind: str, builder: Callable[[object], "Stage"]) -> None:
+def register_stage_builder(kind: str, builder: Callable[..., "Stage"]) -> None:
+    if kind in _STAGE_BUILDERS:
+        raise ValueError(f"stage builder already registered for kind={kind!r}")
     _STAGE_BUILDERS[kind] = builder
 
 
-def build_stage(stage_cfg: StageConfig) -> "Stage":
+def build_stage(stage_cfg: StageConfig, **kwargs) -> "Stage":
+    """Look up the registered builder for stage_cfg.kind and call it with
+    stage_cfg plus any additional kwargs. kwargs let callers pass the
+    rotor/runtime context that some builders need (e.g., notch needs
+    n_blades/n_harmonics from RotorConfig)."""
     if stage_cfg.kind not in _STAGE_BUILDERS:
         raise ValueError(
             f"no stage builder registered for kind={stage_cfg.kind!r}; "
             f"available: {sorted(_STAGE_BUILDERS)}"
         )
-    return _STAGE_BUILDERS[stage_cfg.kind](stage_cfg)
+    return _STAGE_BUILDERS[stage_cfg.kind](stage_cfg, **kwargs)
 
 
-def build_pipeline(stages_cfg: list[StageConfig]) -> list["Stage"]:
-    return [build_stage(s) for s in stages_cfg]
+def build_pipeline(stages_cfg: list[StageConfig], **kwargs) -> list["Stage"]:
+    return [build_stage(s, **kwargs) for s in stages_cfg]

@@ -48,7 +48,7 @@ def test_run_pipeline_empty_stage_list_is_identity():
 
 
 def test_stage_registry_builds_notch_stage():
-    from martymicfly.config import NotchStageConfig, PoleRadiusConfig
+    from martymicfly.config import NotchStageConfig, PoleRadiusConfig, RotorConfig
     from martymicfly.processing.pipeline import build_stage
     cfg = NotchStageConfig(
         kind="notch",
@@ -56,5 +56,48 @@ def test_stage_registry_builds_notch_stage():
         multichannel=False,
         block_size=4096,
     )
-    stage = build_stage(cfg)
+    rotor = RotorConfig(n_blades=2, n_harmonics=4)
+    stage = build_stage(cfg, rotor=rotor)
     assert stage.name == "notch"
+
+
+def test_stage_registry_raises_on_unknown_kind():
+    import pytest
+    from martymicfly.processing.pipeline import build_stage
+
+    class _Fake:
+        kind = "definitely_not_a_real_stage"
+
+    with pytest.raises(ValueError, match="no stage builder"):
+        build_stage(_Fake())
+
+
+def test_notch_builder_rejects_linear_mode():
+    import pytest
+    from martymicfly.config import NotchStageConfig, PoleRadiusConfig, RotorConfig
+    from martymicfly.processing.pipeline import build_stage
+    cfg = NotchStageConfig(
+        kind="notch",
+        pole_radius=PoleRadiusConfig(
+            mode="linear", k_cover=1.5, margin_hz=5.0,
+        ),
+        multichannel=False,
+        block_size=4096,
+    )
+    rotor = RotorConfig(n_blades=2, n_harmonics=4)
+    with pytest.raises(NotImplementedError, match="linear"):
+        build_stage(cfg, rotor=rotor)
+
+
+def test_notch_builder_requires_rotor():
+    import pytest
+    from martymicfly.config import NotchStageConfig, PoleRadiusConfig
+    from martymicfly.processing.pipeline import build_stage
+    cfg = NotchStageConfig(
+        kind="notch",
+        pole_radius=PoleRadiusConfig(mode="scalar", value=0.99),
+        multichannel=False,
+        block_size=4096,
+    )
+    with pytest.raises(ValueError, match="rotor"):
+        build_stage(cfg)
