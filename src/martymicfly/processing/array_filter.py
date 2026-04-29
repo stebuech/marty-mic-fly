@@ -21,22 +21,26 @@ from martymicfly.processing.steering import steer_to_psd
 def integrate_band_maps(
     source_map: SourceMap,
     bands: list[BandConfig],
-    grid_shape: tuple[int, int],
+    grid_shape: tuple[int, int, int],
 ) -> dict[str, np.ndarray]:
-    nx, ny = grid_shape
+    """Integrate source-map powers per band, reshaped to (nx, ny, nz).
+
+    grid_shape is (nx, ny, nz). Returns dict[band_name, ndarray of that shape].
+    """
+    nx, ny, nz = grid_shape
     out: dict[str, np.ndarray] = {}
     f = source_map.frequencies
     for band in bands:
         mask = (f >= band.f_min_hz) & (f <= band.f_max_hz)
         if not mask.any():
-            out[band.name] = np.zeros((nx, ny), dtype=np.float64)
+            out[band.name] = np.zeros((nx, ny, nz), dtype=np.float64)
             continue
         integrated = source_map.powers[mask].sum(axis=0)        # (G,)
-        if integrated.size != nx * ny:
+        if integrated.size != nx * ny * nz:
             raise ValueError(
                 f"powers length {integrated.size} doesn't match grid_shape {grid_shape}"
             )
-        out[band.name] = integrated.reshape(nx, ny)
+        out[band.name] = integrated.reshape(nx, ny, nz)
     return out
 
 
@@ -73,18 +77,21 @@ class ArrayFilterStage:
         csm, freqs = build_measurement_csm(ctx.time_data, ctx.sample_rate, rcfg)
 
         # 2. Diagnostic grid
-        z = self.cfg.diagnostic_grid.z_m
-        if z is None:
+        zmin = self.cfg.diagnostic_grid.z_min_m
+        zmax = self.cfg.diagnostic_grid.z_max_m
+        if zmin is None:  # both None per validator
             plat = ctx.metadata.get("platform")
             if plat is None:
                 raise ValueError(
-                    "diagnostic_grid.z_m=null requires synth file to carry /platform/"
+                    "diagnostic_grid.z_min_m / z_max_m default to platform.rotor_positions[2,0]; "
+                    "synth file lacks /platform/. Set them explicitly in the YAML."
                 )
             z = float(np.asarray(plat["rotor_positions"])[2, 0])
+            zmin = zmax = z
         diag_grid, diag_shape = build_diagnostic_grid(
             self.cfg.diagnostic_grid.extent_xy_m,
             self.cfg.diagnostic_grid.increment_m,
-            z,
+            zmin, zmax,
         )
 
         # 3. CLEAN-SC

@@ -25,14 +25,14 @@ def test_integrate_band_maps_produces_band_dict():
         positions=np.zeros((n_g, 3)),
         powers=powers,
         frequencies=np.linspace(200.0, 1000.0, n_f),
-        grid_shape=(3, 3),
+        grid_shape=(3, 3, 1),
         metadata={},
     )
     bands = [
         BandConfig(name="lo", f_min_hz=0.0, f_max_hz=500.0),
         BandConfig(name="hi", f_min_hz=500.0, f_max_hz=10_000.0),
     ]
-    maps = integrate_band_maps(sm, bands, (3, 3))
+    maps = integrate_band_maps(sm, bands, (3, 3, 1))
     assert set(maps.keys()) == {"lo", "hi"}
-    assert maps["lo"].shape == (3, 3)
-    assert maps["hi"].shape == (3, 3)
+    assert maps["lo"].shape == (3, 3, 1)
+    assert maps["hi"].shape == (3, 3, 1)

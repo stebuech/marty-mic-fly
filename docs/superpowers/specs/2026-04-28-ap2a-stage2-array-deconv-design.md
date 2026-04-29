@@ -381,16 +381,28 @@ def build_measurement_csm(
 
 ### 5.4 `processing/beamform_grid.py`
 
+> **3D-Erweiterung (Stage 3+).** Das Diagnose-Grid wurde von einer reinen
+> xy-Schicht auf eine 3D-Box erweitert: ein einziger CLEAN-SC-Lauf deckt
+> sowohl die Rotor-Ebene als auch tieferliegende Quellen (z. B. das externe
+> Target bei z = −1.5 m) ab, ohne Inkrement-Trennung zwischen den Achsen.
+> `z_min_m == z_max_m` reproduziert das alte 2D-Verhalten (`nz = 1`); andere
+> Konsumenten (Rotor-Disc-Maske, `integrate_band_maps`, Beam-Map-Plots)
+> wurden auf `(nx, ny, nz)` umgezogen, mit Max-Projection über z im
+> 2D-Heatmap und einem zusätzlichen `z_marginal.html` als Höhenprofil.
+
 ```python
 def build_diagnostic_grid(
     extent_xy_m: float,
     increment_m: float,
-    z_m: float,
-) -> tuple[np.ndarray, tuple[int, int]]:
-    """Rectangular grid auf der Rotor-Ebene.
+    z_min_m: float,
+    z_max_m: float,
+) -> tuple[np.ndarray, tuple[int, int, int]]:
+    """3D Rectangular grid (axis-aligned).
 
     nx = ny = round(2*extent_xy_m / increment_m) + 1
-    Returns (G, 3) and (nx, ny).
+    nz     = round((z_max_m - z_min_m) / increment_m) + 1  (>= 1)
+    z_min_m == z_max_m → single z-slice (nz = 1).
+    Returns (G, 3) and (nx, ny, nz). Row order: i*ny*nz + j*nz + k.
     """
 
 
@@ -409,8 +421,14 @@ def build_rotor_disc_mask(
 @dataclass
 class DiagnosticGridConfig:
     extent_xy_m: float = 0.5
-    increment_m: float = 0.02
-    z_m: float | None = None       # None → aus rotor_positions ziehen
+    increment_m: float = 0.05
+    # z_min_m / z_max_m: both None → fall back to platform.rotor_positions[2,0]
+    # at runtime (single z-slice). Same finite value on both → single slice.
+    # z_max_m > z_min_m → 3D box; CLEAN-SC then localizes sources at multiple
+    # altitudes in a single run (e.g. drone in rotor plane + external source
+    # at z=-1.5).
+    z_min_m: float | None = None
+    z_max_m: float | None = None
 
 
 @dataclass
@@ -453,14 +471,16 @@ class ArrayFilterStage:
         # 1. CSM
         csm, freqs = build_measurement_csm(ctx.time_data, ctx.sample_rate, self.cfg.csm)
 
-        # 2. Diagnose-Grid auf Rotor-Ebene
-        z = self.cfg.diagnostic_grid.z_m
-        if z is None:
+        # 2. Diagnose-Grid (2D-Slice oder 3D-Box)
+        zmin = self.cfg.diagnostic_grid.z_min_m
+        zmax = self.cfg.diagnostic_grid.z_max_m
+        if zmin is None:  # both None per validator → fall back to rotor z
             z = float(ctx.metadata["platform"]["rotor_positions"][2, 0])
+            zmin = zmax = z
         diag_grid, diag_shape = build_diagnostic_grid(
             self.cfg.diagnostic_grid.extent_xy_m,
             self.cfg.diagnostic_grid.increment_m,
-            z,
+            zmin, zmax,
         )
 
         # 3. EIN CLEAN-SC-Lauf
@@ -716,7 +736,12 @@ stages:
     diagnostic_grid:
       extent_xy_m: 0.5
       increment_m: 0.02
-      z_m: null            # null → aus /platform/rotor_positions
+      # 3D-Erweiterung: z_min_m / z_max_m statt einzelnem z_m. Beide null →
+      # einzelne z-Schicht aus /platform/rotor_positions[2,0]. z_max_m >
+      # z_min_m → 3D-Box, sodass ein einziger CLEAN-SC-Lauf sowohl die
+      # Rotor-Ebene als auch die externe Quelle bei z=-1.5 abdeckt.
+      z_min_m: -1.6
+      z_max_m: 0.1
     bands:
       - { name: low,  f_min_hz: 200.0,  f_max_hz: 500.0 }
       - { name: mid,  f_min_hz: 500.0,  f_max_hz: 2000.0 }

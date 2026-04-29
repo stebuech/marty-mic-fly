@@ -108,8 +108,20 @@ class CsmConfig(BaseModel):
 class DiagnosticGridConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     extent_xy_m: float = 0.5
-    increment_m: float = 0.02
-    z_m: float | None = None
+    increment_m: float = 0.05
+    # z_min_m / z_max_m: if None, both fall back to platform.rotor_positions[2,0]
+    # at runtime (single z-slice). Setting both to the same finite value also
+    # produces a single slice. Setting z_max_m > z_min_m enables 3D mode.
+    z_min_m: float | None = None
+    z_max_m: float | None = None
+
+    @model_validator(mode="after")
+    def _check_z(self) -> "DiagnosticGridConfig":
+        if (self.z_min_m is None) ^ (self.z_max_m is None):
+            raise ValueError("z_min_m and z_max_m must both be set or both be None")
+        if self.z_min_m is not None and self.z_max_m < self.z_min_m:
+            raise ValueError("z_max_m must be >= z_min_m")
+        return self
 
 
 class BandConfig(BaseModel):

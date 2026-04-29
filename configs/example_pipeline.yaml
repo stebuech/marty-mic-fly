@@ -12,13 +12,13 @@ channels:
 
 rotor:
   n_blades: 2
-  n_harmonics: 20
+  n_harmonics: 13
 
 stages:
   - kind: notch
     pole_radius:
       mode: scalar
-      value: 0.9994
+      value: 0.9996
     multichannel: false
     block_size: 4096
 
@@ -33,8 +33,12 @@ stages:
       f_max_hz: 6000.0
     diagnostic_grid:
       extent_xy_m: 0.5
-      increment_m: 0.02
-      z_m: null
+      increment_m: 0.05
+      # 3D grid spans rotor plane (z≈0) and the external source at z=-1.5,
+      # so a single CLEAN-SC pass localizes both. z_min/z_max == None falls back
+      # to a single z-slice at platform.rotor_positions[2,0].
+      z_min_m: -1.6
+      z_max_m: 0.1
     bands:
       - { name: low,  f_min_hz: 200.0,  f_max_hz: 500.0 }
       - { name: mid,  f_min_hz: 500.0,  f_max_hz: 2000.0 }

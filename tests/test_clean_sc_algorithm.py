@@ -9,7 +9,7 @@ def test_clean_sc_recovers_single_source_on_diagonal_grid():
     from martymicfly.processing.algorithms.clean_sc import CleanScAlgorithm
     from martymicfly.processing.beamform_grid import build_diagnostic_grid
 
-    grid, shape = build_diagnostic_grid(0.5, 0.05, 0.0)
+    grid, shape = build_diagnostic_grid(0.5, 0.05, 0.0, 0.0)
     true_pos = np.array([[0.20, 0.0, 0.0]])
     freqs = np.array([1000.0, 1500.0, 2000.0])
     sm_true = SourceMap(

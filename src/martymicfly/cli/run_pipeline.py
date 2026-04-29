@@ -34,7 +34,7 @@ log = logging.getLogger("martymicfly.run_pipeline")
 # Default config path — repo-root/configs/example_notch.yaml. Resolved from this
 # file's location so calling main() from a Python console (without argv) works.
 _REPO_ROOT = Path(__file__).resolve().parents[3]
-DEFAULT_CONFIG = _REPO_ROOT / "configs" / "example_notch.yaml"
+DEFAULT_CONFIG = _REPO_ROOT / "configs" / "example_pipeline.yaml"
 
 
 def _select_segment(cfg, n_total: int, fs: float) -> tuple[float, int]:
@@ -235,7 +235,7 @@ def _emit_array_filter_outputs(
     """
     from martymicfly.io.residual_csm_h5 import write_residual_csm
     from martymicfly.eval.array_metrics import compute_array_metrics
-    from martymicfly.eval.array_plots import plot_beam_maps, plot_target_psd
+    from martymicfly.eval.array_plots import plot_beam_maps, plot_target_psd, plot_z_marginal
     from martymicfly.io.ground_truth_h5 import load_ground_truth
     from martymicfly.processing.array_filter import integrate_band_maps
     from martymicfly.processing.algorithms.base import SourceMap as _SM
@@ -274,6 +274,20 @@ def _emit_array_filter_outputs(
         mic_positions=ctx.mic_positions,
         target_xy_m=(stage_cfg.target_point_m[0], stage_cfg.target_point_m[1]),
         out_path=str(out_dir / "beam_maps.html"),
+    )
+
+    # z-marginal plot: altitude profile of pre/post peak power per band.
+    # Use the resolved diagnostic-grid z-axis (in case z_min/z_max were None and
+    # ArrayFilterStage filled them in from platform.rotor_positions[2,0]).
+    z_values = np.unique(af["diagnostic_grid"][:, 2])
+    rotor_z = float(np.asarray(plat["rotor_positions"])[2, 0])
+    plot_z_marginal(
+        beam_maps_pre, beam_maps_post,
+        z_values=z_values,
+        bpfs=[],
+        out_path=str(out_dir / "z_marginal.html"),
+        rotor_z_m=rotor_z,
+        target_z_m=float(stage_cfg.target_point_m[2]),
     )
 
     # Target PSD plot + optional ground-truth overlay

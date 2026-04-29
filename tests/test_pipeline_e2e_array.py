@@ -23,7 +23,7 @@ stages:
     block_size: 1024
   - kind: array_filter
     csm: {{nperseg: 256, noverlap: 128, f_min_hz: 200.0, f_max_hz: 4000.0}}
-    diagnostic_grid: {{extent_xy_m: 0.6, increment_m: 0.05, z_m: 0.0}}
+    diagnostic_grid: {{extent_xy_m: 0.6, increment_m: 0.05, z_min_m: 0.0, z_max_m: 0.0}}
     bands:
       - {{name: mid, f_min_hz: 500.0, f_max_hz: 2000.0}}
     target_point_m: [0.5, 0.0, -0.5]
@@ -39,7 +39,7 @@ output: {{dir: {tmp_path / 'out'}}}
     assert len(runs) == 1
     run_dir = runs[0]
     for name in ("filtered.h5", "residual_csm.h5", "beam_maps.html",
-                 "target_psd.html", "metrics.json",
+                 "target_psd.html", "z_marginal.html", "metrics.json",
                  "stage1_metrics.csv", "stage2_metrics.csv"):
         assert (run_dir / name).exists(), f"missing {name}"
     metrics = json.loads((run_dir / "metrics.json").read_text())

@@ -146,7 +146,8 @@ def test_array_filter_stage_config_full_payload():
         "algorithm": "clean_sc",
         "csm": {"nperseg": 512, "noverlap": 256, "window": "hann",
                 "diag_loading_rel": 1e-6, "f_min_hz": 200.0, "f_max_hz": 6000.0},
-        "diagnostic_grid": {"extent_xy_m": 0.5, "increment_m": 0.02, "z_m": None},
+        "diagnostic_grid": {"extent_xy_m": 0.5, "increment_m": 0.02,
+                            "z_min_m": None, "z_max_m": None},
         "bands": [
             {"name": "low", "f_min_hz": 200.0, "f_max_hz": 500.0},
             {"name": "mid", "f_min_hz": 500.0, "f_max_hz": 2000.0},
