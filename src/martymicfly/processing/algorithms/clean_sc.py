@@ -55,7 +55,8 @@ class CleanScAlgorithm:
         ps.frequencies = np.asarray(frequencies, dtype=float)
 
         bf = BeamformerCleansc(
-            freq_data=ps, steer=steer, r_diag=False,
+            freq_data=ps, steer=steer,
+            r_diag=bool(params.get("r_diag", False)),
             damp=params["damp"], n_iter=params["n_iter"],
             cached=False,
         )

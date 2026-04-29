@@ -141,6 +141,7 @@ class CleanScConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     damp: float = 0.6
     n_iter: int = Field(default=100, ge=1)
+    r_diag: bool = True
 
 
 class ArrayFilterStageConfig(BaseModel):

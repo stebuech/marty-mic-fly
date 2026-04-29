@@ -105,6 +105,7 @@ class ArrayFilterStage:
             params={
                 "damp": self.cfg.clean_sc.damp,
                 "n_iter": self.cfg.clean_sc.n_iter,
+                "r_diag": self.cfg.clean_sc.r_diag,
             },
         )
 

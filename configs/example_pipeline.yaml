@@ -44,10 +44,16 @@ stages:
       - { name: mid,  f_min_hz: 500.0,  f_max_hz: 2000.0 }
       - { name: high, f_min_hz: 2000.0, f_max_hz: 6000.0 }
     target_point_m: [0.0, 0.0, -1.5]
-    rotor_z_tolerance_m: 0.05
+    # CLEAN-SC scatters rotor energy along z due to ring-array symmetry; ±0.25 m
+    # captures the bulk of the rotor lobe without reaching the external source at
+    # z=-1.5. Narrower values (e.g. 0.05) catch ~0% of band power → no subtraction.
+    rotor_z_tolerance_m: 0.25
     clean_sc:
       damp: 0.6
       n_iter: 100
+      # r_diag=True removes the CSM diagonal (uncorrelated mic self-noise) before
+      # beamforming; suppresses the centerline beam at xy=(0,0).
+      r_diag: true
 
 metrics:
   welch_nperseg: 8192
