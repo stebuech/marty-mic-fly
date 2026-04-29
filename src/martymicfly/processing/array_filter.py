@@ -8,7 +8,11 @@ import numpy as np
 
 from martymicfly.config import ArrayFilterStageConfig, BandConfig
 from martymicfly.processing.algorithms import ALGORITHM_REGISTRY
-from martymicfly.processing.algorithms.base import SourceMap, reconstruct_csm
+from martymicfly.processing.algorithms.base import (
+    SourceMap,
+    reconstruct_csm,
+    rescale_source_map_to_csm_trace,
+)
 from martymicfly.processing.beamform_grid import (
     build_diagnostic_grid,
     build_rotor_disc_mask,
@@ -107,6 +111,12 @@ class ArrayFilterStage:
                 "n_iter": self.cfg.clean_sc.n_iter,
                 "r_diag": self.cfg.clean_sc.r_diag,
             },
+        )
+        # Acoular's `classic`-steer BeamformerCleansc returns powers off by a
+        # geometry-dependent factor (array gain). Trace-match per frequency to
+        # restore Pa² convention so reconstruct_csm produces a sensible drone CSM.
+        source_map, _ = rescale_source_map_to_csm_trace(
+            source_map, csm, ctx.mic_positions,
         )
 
         # 4. Rotor-disc mask

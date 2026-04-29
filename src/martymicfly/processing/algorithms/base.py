@@ -71,3 +71,27 @@ def reconstruct_csm(
         weighted = h * powers[fi][None, :]                      # (M, G)
         csm[fi] = weighted @ h.conj().T                         # (M, M)
     return csm
+
+
+def rescale_source_map_to_csm_trace(
+    source_map: SourceMap,
+    csm_observed: np.ndarray,
+    mic_positions: np.ndarray,
+    speed_of_sound: float = SPEED_OF_SOUND,
+) -> tuple[SourceMap, np.ndarray]:
+    """Re-scale source_map.powers per-frequency so reconstruct_csm matches the
+    observed CSM trace. Acoular's BeamformerCleansc.synthetic with steer_type
+    'classic' returns powers off by a deterministic, geometry-dependent factor
+    (the array gain Σ_m|h_target,m|²). Trace-matching corrects to Pa².
+
+    Returns (calibrated_source_map, per_frequency_factors).
+    """
+    csm_rebuilt = reconstruct_csm(source_map, mic_positions, speed_of_sound)
+    n_f = source_map.frequencies.shape[0]
+    factors = np.zeros(n_f, dtype=np.float64)
+    for fi in range(n_f):
+        obs = float(np.real(np.trace(csm_observed[fi])))
+        rec = float(np.real(np.trace(csm_rebuilt[fi])))
+        factors[fi] = obs / rec if rec > 1e-30 else 0.0
+    new_powers = source_map.powers * factors[:, None]
+    return replace(source_map, powers=new_powers), factors
