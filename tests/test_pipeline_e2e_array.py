@@ -28,6 +28,7 @@ stages:
       - {{name: mid, f_min_hz: 500.0, f_max_hz: 2000.0}}
     target_point_m: [0.5, 0.0, -0.5]
     rotor_z_tolerance_m: 0.05
+    mask_mode: rotor_disc
     clean_sc: {{damp: 0.6, n_iter: 30}}
 metrics: {{welch_nperseg: 1024, welch_noverlap: 512}}
 plots: {{enabled: false, spectrogram_window: 512, spectrogram_overlap: 256}}

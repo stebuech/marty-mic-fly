@@ -16,6 +16,7 @@ from martymicfly.processing.algorithms.base import (
 from martymicfly.processing.beamform_grid import (
     build_diagnostic_grid,
     build_rotor_disc_mask,
+    build_target_box_mask,
 )
 from martymicfly.processing.csm import CsmConfig as RuntimeCsmConfig, build_measurement_csm
 from martymicfly.processing.pipeline import register_stage_builder
@@ -119,17 +120,31 @@ class ArrayFilterStage:
             source_map, csm, ctx.mic_positions,
         )
 
-        # 4. Rotor-disc mask
+        # 4. Build BOTH masks. The active subtraction is selected by mask_mode;
+        # the other mask is still produced and stashed in metadata for diagnosis.
         plat = ctx.metadata["platform"]
-        drone_mask = build_rotor_disc_mask(
+        rotor_disc_mask = build_rotor_disc_mask(
             diag_grid,
             np.asarray(plat["rotor_positions"]),
             np.asarray(plat["rotor_radii"]),
             self.cfg.rotor_z_tolerance_m,
         )
+        target_box_mask = build_target_box_mask(
+            diag_grid,
+            self.cfg.target_point_m,
+            self.cfg.target_box_half_extent_m,
+        )
 
-        # 5. Drone CSM and residual
-        drone_csm = reconstruct_csm(source_map.subset(drone_mask), ctx.mic_positions)
+        # 5. Choose the cells to SUBTRACT (drone-energy):
+        #   - rotor_disc: the cells inside the rotor discs.
+        #   - target_box: every cell *outside* the target-preserve box.
+        if self.cfg.mask_mode == "rotor_disc":
+            subtract_mask = rotor_disc_mask
+        else:  # "target_box"
+            subtract_mask = ~target_box_mask
+        drone_csm = reconstruct_csm(
+            source_map.subset(subtract_mask), ctx.mic_positions,
+        )
         residual_csm = csm - drone_csm
 
         # 6. Beam maps
@@ -146,7 +161,11 @@ class ArrayFilterStage:
                 "residual_csm": residual_csm,
                 "frequencies": freqs,
                 "source_map": source_map,
-                "drone_mask": drone_mask,
+                # Backward-compatible alias for the active subtraction mask:
+                "drone_mask": subtract_mask,
+                "rotor_disc_mask": rotor_disc_mask,
+                "target_box_mask": target_box_mask,
+                "mask_mode": self.cfg.mask_mode,
                 "beam_maps": beam_maps,
                 "target_psd_pre": psd_pre,
                 "target_psd_post": psd_post,

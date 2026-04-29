@@ -60,3 +60,27 @@ def test_build_rotor_disc_mask_marks_inside_only():
         d0 = np.linalg.norm(p[:2] - np.array([0.15, 0.0]))
         d1 = np.linalg.norm(p[:2] - np.array([-0.15, 0.0]))
         assert d0 <= 0.10 + 1e-9 or d1 <= 0.10 + 1e-9
+
+
+def test_build_target_box_mask_marks_inside_only():
+    from martymicfly.processing.beamform_grid import (
+        build_diagnostic_grid,
+        build_target_box_mask,
+    )
+    grid, _ = build_diagnostic_grid(0.5, 0.05, -0.5, 0.5)
+    target = (0.0, 0.0, -0.3)
+    half = (0.1, 0.1, 0.05)
+    mask = build_target_box_mask(grid, target, half)
+    assert mask.sum() > 0
+    inside = grid[mask]
+    for p in inside:
+        assert abs(p[0] - target[0]) <= half[0] + 1e-12
+        assert abs(p[1] - target[1]) <= half[1] + 1e-12
+        assert abs(p[2] - target[2]) <= half[2] + 1e-12
+    # outside cells should be excluded
+    outside = grid[~mask]
+    assert outside.shape[0] > inside.shape[0]
+    # specifically: a cell at the corner is outside
+    far = np.array([0.5, 0.5, 0.5])
+    far_idx = np.argmin(np.linalg.norm(grid - far, axis=1))
+    assert not mask[far_idx]

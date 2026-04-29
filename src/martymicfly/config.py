@@ -157,6 +157,14 @@ class ArrayFilterStageConfig(BaseModel):
     ])
     target_point_m: tuple[float, float, float] = (0.0, 0.0, -1.5)
     rotor_z_tolerance_m: float = 0.05
+    # Subtraction mask:
+    #   - "target_box": preserve a small box around target_point_m, subtract everything else.
+    #     Robust against CLEAN-SC mislocalization (centerline beams, side lobes).
+    #   - "rotor_disc": subtract cells inside the rotor discs ± rotor_z_tolerance_m.
+    #     Direct interpretation but only catches energy CLEAN-SC actually localizes
+    #     onto the rotors — vulnerable to centerline / smearing artefacts.
+    mask_mode: Literal["target_box", "rotor_disc"] = "target_box"
+    target_box_half_extent_m: tuple[float, float, float] = (0.15, 0.15, 0.15)
     clean_sc: CleanScConfig = Field(default_factory=CleanScConfig)
 
 

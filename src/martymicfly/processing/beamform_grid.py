@@ -58,3 +58,19 @@ def build_rotor_disc_mask(
         z_ok = np.abs(g_z - r_z[i]) <= z_tol_m
         mask |= (d_xy <= rotor_radii[i]) & z_ok
     return mask
+
+
+def build_target_box_mask(
+    grid_positions: np.ndarray,                 # (G, 3)
+    target_point_m: tuple[float, float, float],
+    half_extent_m: tuple[float, float, float],
+) -> np.ndarray:
+    """Boolean mask: True for cells inside an axis-aligned box around the target.
+
+    Used by ArrayFilterStage with mask_mode='target_box': cells *outside* the
+    box are subtracted (~drone), cells *inside* are preserved (~target).
+    """
+    target = np.asarray(target_point_m, dtype=np.float64)
+    half = np.asarray(half_extent_m, dtype=np.float64)
+    delta = np.abs(grid_positions - target[None, :])   # (G, 3)
+    return np.all(delta <= half[None, :], axis=1)

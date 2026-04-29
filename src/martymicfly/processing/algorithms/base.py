@@ -86,12 +86,19 @@ def rescale_source_map_to_csm_trace(
 
     Returns (calibrated_source_map, per_frequency_factors).
     """
-    csm_rebuilt = reconstruct_csm(source_map, mic_positions, speed_of_sound)
-    n_f = source_map.frequencies.shape[0]
+    # CLEAN-SC may emit NaN/negative powers in degenerate cells; sanitize before
+    # rescaling so downstream reconstruct_csm and CSM subtraction stay finite.
+    sanitized_powers = np.where(
+        np.isfinite(source_map.powers), source_map.powers, 0.0,
+    )
+    sanitized_powers = np.maximum(sanitized_powers, 0.0)
+    sm_clean = replace(source_map, powers=sanitized_powers)
+    csm_rebuilt = reconstruct_csm(sm_clean, mic_positions, speed_of_sound)
+    n_f = sm_clean.frequencies.shape[0]
     factors = np.zeros(n_f, dtype=np.float64)
     for fi in range(n_f):
         obs = float(np.real(np.trace(csm_observed[fi])))
         rec = float(np.real(np.trace(csm_rebuilt[fi])))
         factors[fi] = obs / rec if rec > 1e-30 else 0.0
-    new_powers = source_map.powers * factors[:, None]
-    return replace(source_map, powers=new_powers), factors
+    new_powers = sm_clean.powers * factors[:, None]
+    return replace(sm_clean, powers=new_powers), factors
