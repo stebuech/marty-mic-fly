@@ -3,3 +3,4 @@
 # that only `from martymicfly.processing.pipeline import build_stage` would
 # see an empty registry.
 from . import notch  # noqa: F401  (side-effect: registers "notch" builder)
+from . import array_filter  # noqa: F401  (side-effect: registers "array_filter" builder)

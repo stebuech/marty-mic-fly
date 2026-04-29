@@ -78,7 +78,17 @@ def _resolve_fmax(cfg, per_motor_bpf: np.ndarray, n_harmonics: int,
 
 
 def _write_metrics(metrics: dict, json_path: Path, csv_path: Path) -> None:
-    json_path.write_text(json.dumps(metrics, indent=2), encoding="utf-8")
+    """Write notch-stage metrics nested under ``stage1_notch`` in metrics.json
+    and to a stage-1 CSV (default: ``stage1_metrics.csv``).
+
+    The JSON write merges into any pre-existing file at ``json_path`` rather
+    than overwriting, so subsequent stages (e.g. array_filter) can attach
+    their own top-level keys.
+    """
+    existing = json.loads(json_path.read_text(encoding="utf-8")) if json_path.exists() else {}
+    existing["stage1_notch"] = metrics
+    json_path.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+
     fieldnames = [
         "channel", "broadband_pre_db", "broadband_post_db", "broadband_delta_db",
         "tonal_total_pre_db", "tonal_total_post_db", "tonal_reduction_db",
@@ -169,7 +179,7 @@ def _emit_notch_outputs(
         "segment": {"start_s": seg_start_s, "duration_s": n_seg / fs},
     })
     _write_metrics(metrics, out_dir / cfg.output.metrics_json,
-                   out_dir / cfg.output.metrics_csv)
+                   out_dir / "stage1_metrics.csv")
 
     # 6. Plots
     if cfg.plots.enabled:
@@ -204,6 +214,125 @@ def _emit_notch_outputs(
             "pole_radius_repr": pole_repr,
         },
     )
+
+
+def _emit_array_filter_outputs(
+    *,
+    ctx: PipelineContext,
+    cfg: AppConfig,
+    stages_cfg,
+    out_dir: Path,
+) -> None:
+    """Write Stage-2 (ArrayFilterStage) outputs.
+
+    - ``residual_csm.h5`` — residual cross-spectral matrix.
+    - ``beam_maps.html`` — pre/post beam maps (CLEAN-SC integrated over bands).
+    - ``target_psd.html`` — pseudo-target PSD (pre/post + optional ground truth).
+    - Merges Stage-2 metrics into ``metrics.json`` under key ``stage2_array_filter``.
+    - Writes per-band rows to ``stage2_metrics.csv``.
+
+    Reads ``ctx.metadata['array_filter']`` as set by ``ArrayFilterStage.process()``.
+    """
+    from martymicfly.io.residual_csm_h5 import write_residual_csm
+    from martymicfly.eval.array_metrics import compute_array_metrics
+    from martymicfly.eval.array_plots import plot_beam_maps, plot_target_psd
+    from martymicfly.io.ground_truth_h5 import load_ground_truth
+    from martymicfly.processing.array_filter import integrate_band_maps
+    from martymicfly.processing.algorithms.base import SourceMap as _SM
+
+    af = ctx.metadata["array_filter"]
+    stage_cfg = next(s for s in stages_cfg if s.kind == "array_filter")
+
+    # residual_csm.h5
+    write_residual_csm(
+        str(out_dir / "residual_csm.h5"),
+        af["residual_csm"], af["frequencies"],
+        attrs={
+            "algorithm": stage_cfg.algorithm,
+            "stage": "array_filter",
+            "config_hash": cfg.config_hash(),
+        },
+    )
+
+    # post beam maps from masked source_map (band integration on subset)
+    sm = af["source_map"]
+    post_powers_full = sm.powers * (~af["drone_mask"])[None, :]
+    post_full_sm = _SM(
+        positions=sm.positions, powers=post_powers_full,
+        frequencies=sm.frequencies, grid_shape=af["diagnostic_grid_shape"],
+        metadata={},
+    )
+    beam_maps_pre = integrate_band_maps(sm, stage_cfg.bands, af["diagnostic_grid_shape"])
+    beam_maps_post = integrate_band_maps(post_full_sm, stage_cfg.bands, af["diagnostic_grid_shape"])
+
+    plat = ctx.metadata["platform"]
+    plot_beam_maps(
+        beam_maps_pre, beam_maps_post,
+        extent_xy_m=stage_cfg.diagnostic_grid.extent_xy_m,
+        rotor_positions=np.asarray(plat["rotor_positions"]),
+        rotor_radii=np.asarray(plat["rotor_radii"]),
+        mic_positions=ctx.mic_positions,
+        target_xy_m=(stage_cfg.target_point_m[0], stage_cfg.target_point_m[1]),
+        out_path=str(out_dir / "beam_maps.html"),
+    )
+
+    # Target PSD plot + optional ground-truth overlay
+    bpfs: list[float] = []  # left empty (could be derived from per_motor_bpf)
+    gt_block = None
+    if cfg.input.ground_truth_h5:
+        gt = load_ground_truth(cfg.input.ground_truth_h5)
+        from scipy.signal import welch as _welch
+        gt_f, gt_psd = _welch(
+            gt.signal, fs=gt.sample_rate, nperseg=stage_cfg.csm.nperseg,
+            noverlap=stage_cfg.csm.noverlap, scaling="density",
+        )
+        mask = (gt_f >= stage_cfg.csm.f_min_hz) & (gt_f <= stage_cfg.csm.f_max_hz)
+        gt_psd = gt_psd[mask]
+        gt_f = gt_f[mask]
+        gt_psd_interp = np.interp(af["frequencies"], gt_f, gt_psd)
+        gt_block = {"psd_at_target": gt_psd_interp, "frequencies": af["frequencies"]}
+
+    plot_target_psd(
+        af["frequencies"], af["target_psd_pre"], af["target_psd_post"],
+        gt_psd=(gt_block["psd_at_target"] if gt_block else None),
+        bpfs=bpfs, out_path=str(out_dir / "target_psd.html"),
+    )
+
+    # Stage-2 metrics → merge into metrics.json
+    array_metrics = compute_array_metrics(
+        csm_pre=af["csm_pre"], residual_csm=af["residual_csm"],
+        frequencies=af["frequencies"],
+        psd_pre=af["target_psd_pre"], psd_post=af["target_psd_post"],
+        source_map_powers=sm.powers, drone_mask=af["drone_mask"],
+        bands=[b.model_dump() for b in stage_cfg.bands],
+        ground_truth=gt_block,
+    )
+
+    mj = out_dir / cfg.output.metrics_json
+    existing = json.loads(mj.read_text(encoding="utf-8")) if mj.exists() else {}
+    existing["stage2_array_filter"] = array_metrics
+    mj.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+
+    # Stage-2 CSV (one row per band)
+    mc = out_dir / "stage2_metrics.csv"
+    fieldnames = [
+        "stage", "band",
+        "csm_trace_reduction_db", "target_psd_reduction_db",
+        "drone_power_share_db", "external_recovery_db",
+    ]
+    with mc.open("w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=fieldnames)
+        w.writeheader()
+        for name, band in array_metrics["bands"].items():
+            gt = band.get("ground_truth") or {}
+            w.writerow({
+                "stage": "array_filter",
+                "band": name,
+                "csm_trace_reduction_db": band["csm_trace_reduction_db"],
+                "target_psd_reduction_db": band["target_psd_reduction_db"],
+                "drone_power_share_db": band["drone_power_share_db"],
+                "external_recovery_db": gt.get("external_recovery_db", ""),
+            })
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -255,6 +384,9 @@ def main(argv: list[str] | None = None) -> int:
     harm_matrix = build_harmonic_matrix(per_motor_bpf, cfg.rotor.n_harmonics)
 
     # 4. Pipeline
+    initial_metadata: dict = {}
+    if src.get("platform") is not None:
+        initial_metadata["platform"] = src["platform"]
     ctx = PipelineContext(
         time_data=signal,
         sample_rate=src["sample_rate"],
@@ -262,7 +394,7 @@ def main(argv: list[str] | None = None) -> int:
         mic_positions=geom,
         per_motor_bpf=per_motor_bpf,
         harm_matrix=harm_matrix,
-        metadata={},
+        metadata=initial_metadata,
     )
     stages = build_pipeline(cfg.stages, rotor=cfg.rotor)
     ctx = run_pipeline(stages, ctx)
@@ -278,6 +410,15 @@ def main(argv: list[str] | None = None) -> int:
             config_hash=cfg.config_hash(),
             seg_start_s=seg_start_s,
             n_seg=n_seg,
+        )
+
+    # Stage-2: array_filter outputs (when present in metadata)
+    if ctx.metadata.get("array_filter") is not None:
+        _emit_array_filter_outputs(
+            ctx=ctx,
+            cfg=cfg,
+            stages_cfg=cfg.stages,
+            out_dir=out_dir,
         )
 
     # 8. Snapshot config

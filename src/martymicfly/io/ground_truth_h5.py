@@ -18,8 +18,18 @@ class GroundTruth:
 
 def load_ground_truth(path: str) -> GroundTruth:
     with h5py.File(path, "r") as f:
-        sr = float(f.attrs["sample_freq"])
-        sig = np.asarray(f["time_data"][...]).reshape(-1)
+        td = f["time_data"]
+        # sample_freq lives on the file root in some test fixtures and on the
+        # ``time_data`` dataset in files written by compose_external. Accept either.
+        if "sample_freq" in f.attrs:
+            sr = float(f.attrs["sample_freq"])
+        elif "sample_freq" in td.attrs:
+            sr = float(td.attrs["sample_freq"])
+        else:
+            raise KeyError(
+                f"{path}: missing 'sample_freq' attribute on file root or time_data"
+            )
+        sig = np.asarray(td[...]).reshape(-1)
         ext = f["external"]
         pos = tuple(float(x) for x in np.asarray(ext.attrs["position_m"]))
         return GroundTruth(

@@ -75,16 +75,17 @@ def test_end_to_end_on_tiny_fixture(tmp_path: Path):
 
     assert (run_dir / "filtered.h5").exists()
     assert (run_dir / "metrics.json").exists()
-    assert (run_dir / "metrics.csv").exists()
+    assert (run_dir / "stage1_metrics.csv").exists()
     assert (run_dir / "config.yaml").exists()
     plots = list((run_dir / "plots").glob("ch*.html"))
     assert len(plots) == 2  # channel_subset
 
     metrics = json.loads((run_dir / "metrics.json").read_text())
-    assert metrics["n_motors"] == 2
-    assert metrics["n_harmonics"] == 5
+    notch = metrics["stage1_notch"]
+    assert notch["n_motors"] == 2
+    assert notch["n_harmonics"] == 5
     # Tonal reduction at the seeded harmonics should be substantial
-    for ch in metrics["channels"]:
+    for ch in notch["channels"]:
         assert ch["tonal_reduction_db"] > 15.0, ch
 
 
