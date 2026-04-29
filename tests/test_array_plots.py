@@ -76,3 +76,28 @@ def test_plot_z_marginal_handles_nz1(tmp_path):
     out = tmp_path / "zmarg_nz1.html"
     plot_z_marginal(pre, post, z_values, bpfs=[], out_path=str(out))
     assert out.exists()
+
+
+def test_plot_z_marginal_split_mode(tmp_path):
+    """preserved_mask_3d switches to kept-vs-subtracted view."""
+    from martymicfly.eval.array_plots import plot_z_marginal
+    nx, ny, nz = 5, 5, 7
+    rng = np.random.default_rng(0)
+    pre = {"mid": rng.random((nx, ny, nz))}
+    post = {"mid": rng.random((nx, ny, nz)) * 0.1}
+    z_values = np.linspace(-1.0, 0.5, nz)
+    # Preserved zone: z in [-0.5, 0.0], xy <= |0.1|
+    preserved = np.zeros((nx, ny, nz), dtype=bool)
+    z_keep = (z_values >= -0.5) & (z_values <= 0.0)
+    xy_keep = np.zeros((nx, ny), dtype=bool)
+    xy_keep[1:4, 1:4] = True
+    preserved[..., z_keep] = xy_keep[..., None]
+    out = tmp_path / "zmarg_split.html"
+    plot_z_marginal(pre, post, z_values, bpfs=[], out_path=str(out),
+                    rotor_z_m=0.0, target_z_m=-0.3,
+                    preserved_mask_3d=preserved)
+    assert out.exists()
+    text = out.read_text()
+    assert "kept" in text
+    assert "subtracted" in text
+    assert "kept vs subtracted" in text

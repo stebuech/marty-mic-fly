@@ -281,6 +281,14 @@ def _emit_array_filter_outputs(
     # ArrayFilterStage filled them in from platform.rotor_positions[2,0]).
     z_values = np.unique(af["diagnostic_grid"][:, 2])
     rotor_z = float(np.asarray(plat["rotor_positions"])[2, 0])
+    # Build the per-cell preservation mask (cells NOT subtracted from CSM).
+    # In target_box mode this is the box itself; in rotor_disc mode it's
+    # everything outside the rotor discs.
+    nx, ny, nz = af["diagnostic_grid_shape"]
+    if af["mask_mode"] == "target_box":
+        preserved_3d = af["target_box_mask"].reshape(nx, ny, nz)
+    else:
+        preserved_3d = (~af["rotor_disc_mask"]).reshape(nx, ny, nz)
     plot_z_marginal(
         beam_maps_pre, beam_maps_post,
         z_values=z_values,
@@ -288,6 +296,7 @@ def _emit_array_filter_outputs(
         out_path=str(out_dir / "z_marginal.html"),
         rotor_z_m=rotor_z,
         target_z_m=float(stage_cfg.target_point_m[2]),
+        preserved_mask_3d=preserved_3d,
     )
 
     # Target PSD plot + optional ground-truth overlay

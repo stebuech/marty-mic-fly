@@ -91,6 +91,17 @@ def plot_beam_maps(
     fig.write_html(out_path, include_plotlyjs="cdn")
 
 
+def _per_z_max(arr3d: np.ndarray, xy_mask_3d: np.ndarray | None = None) -> np.ndarray:
+    """Per-z-slice maximum over xy, optionally restricted to xy-cells where
+    xy_mask_3d is True. Returns shape (nz,). Empty mask cells -> 1e-30."""
+    nx, ny, nz = arr3d.shape
+    if xy_mask_3d is None:
+        return arr3d.reshape(nx * ny, nz).max(axis=0)
+    masked = np.where(xy_mask_3d, arr3d, -np.inf)
+    out = masked.reshape(nx * ny, nz).max(axis=0)
+    return np.where(np.isfinite(out), out, 1e-30)
+
+
 def plot_z_marginal(
     pre_maps: dict[str, np.ndarray],
     post_maps: dict[str, np.ndarray],
@@ -99,11 +110,23 @@ def plot_z_marginal(
     out_path: str,
     rotor_z_m: float = 0.0,
     target_z_m: float | None = None,
+    preserved_mask_3d: np.ndarray | None = None,
 ) -> None:
-    """Per-z marginal: 10*log10(max over xy) for each band, pre/post.
+    """Per-z marginal of CLEAN-SC source map.
 
-    pre_maps / post_maps: each value has shape (nx, ny, nz). z_values: (nz,).
-    If nz == 1, writes a degenerate single-point HTML rather than crashing.
+    Two display modes:
+
+    * If ``preserved_mask_3d`` is None: classic pre/post per band.
+
+    * If ``preserved_mask_3d`` is given (shape (nx, ny, nz) bool, True =
+      cell preserved, ~ = cell subtracted): per band, plot two lines:
+        - **kept**: max over xy where preserved_mask_3d is True
+        - **subtracted**: max over xy where preserved_mask_3d is False
+      This makes the subtraction effect transparent at every z-slice. The
+      z-range fully covered by preserved cells is shaded green; the range
+      fully subtracted is shaded red.
+
+    pre_maps / post_maps: each value (nx, ny, nz). z_values: (nz,).
     """
     z_values = np.asarray(z_values, dtype=np.float64)
     nz = z_values.size
@@ -114,6 +137,8 @@ def plot_z_marginal(
         "#d62728", "#9467bd", "#8c564b",
         "#e377c2", "#7f7f7f", "#bcbd22", "#17becf",
     ]
+
+    split_mode = preserved_mask_3d is not None
     for idx, name in enumerate(pre_maps.keys()):
         color = palette[idx % len(palette)]
         pre = pre_maps[name]
@@ -121,21 +146,55 @@ def plot_z_marginal(
         if pre.ndim == 2:
             pre = pre[..., None]
             post = post[..., None]
-        # max over xy per z-slice
-        pre_maxxy = np.maximum(pre.reshape(-1, pre.shape[2]).max(axis=0), 1e-30)
-        post_maxxy = np.maximum(post.reshape(-1, post.shape[2]).max(axis=0), 1e-30)
-        fig.add_trace(go.Scatter(
-            x=z_values, y=10.0 * np.log10(pre_maxxy),
-            mode="lines+markers", name=f"pre — {name}",
-            line=dict(color=color),
-        ))
-        fig.add_trace(go.Scatter(
-            x=z_values, y=10.0 * np.log10(post_maxxy),
-            mode="lines+markers", name=f"post — {name}",
-            line=dict(color=color, dash="dot"),
-        ))
+
+        if split_mode:
+            preserved = preserved_mask_3d
+            kept = np.maximum(_per_z_max(pre, preserved), 1e-30)
+            subtracted = np.maximum(_per_z_max(pre, ~preserved), 1e-30)
+            fig.add_trace(go.Scatter(
+                x=z_values, y=10.0 * np.log10(kept),
+                mode="lines+markers", name=f"kept — {name}",
+                line=dict(color=color, width=2),
+            ))
+            fig.add_trace(go.Scatter(
+                x=z_values, y=10.0 * np.log10(subtracted),
+                mode="lines+markers", name=f"subtracted — {name}",
+                line=dict(color=color, dash="dot", width=1),
+            ))
+        else:
+            pre_maxxy = np.maximum(_per_z_max(pre), 1e-30)
+            post_maxxy = np.maximum(_per_z_max(post), 1e-30)
+            fig.add_trace(go.Scatter(
+                x=z_values, y=10.0 * np.log10(pre_maxxy),
+                mode="lines+markers", name=f"pre — {name}",
+                line=dict(color=color),
+            ))
+            fig.add_trace(go.Scatter(
+                x=z_values, y=10.0 * np.log10(post_maxxy),
+                mode="lines+markers", name=f"post — {name}",
+                line=dict(color=color, dash="dot"),
+            ))
 
     if nz > 1:
+        # Shade preservation / subtraction zones along z.
+        if split_mode:
+            preserved_per_z = preserved_mask_3d.reshape(-1, nz).any(axis=0)
+            subtracted_per_z = (~preserved_mask_3d).reshape(-1, nz).any(axis=0)
+            fully_preserved = preserved_per_z & ~subtracted_per_z
+            fully_subtracted = subtracted_per_z & ~preserved_per_z
+            dz = float(z_values[1] - z_values[0]) if nz > 1 else 0.0
+            for k in np.where(fully_preserved)[0]:
+                fig.add_vrect(
+                    x0=z_values[k] - dz / 2, x1=z_values[k] + dz / 2,
+                    fillcolor="lightgreen", opacity=0.10,
+                    layer="below", line_width=0,
+                )
+            for k in np.where(fully_subtracted)[0]:
+                fig.add_vrect(
+                    x0=z_values[k] - dz / 2, x1=z_values[k] + dz / 2,
+                    fillcolor="lightcoral", opacity=0.10,
+                    layer="below", line_width=0,
+                )
         fig.add_vline(x=rotor_z_m, line=dict(color="cyan", dash="dash", width=1),
                       annotation_text="rotor z")
         if target_z_m is not None:
@@ -147,8 +206,13 @@ def plot_z_marginal(
         _ = f
 
     fig.update_xaxes(title_text="z [m]")
-    fig.update_yaxes(title_text="10·log10( max over xy ) [dB]")
-    title = "Stage-2 z-marginal (CLEAN-SC, pre vs post)"
+    ylabel = (
+        "10·log10( max over xy in subset ) [dB]"
+        if split_mode else "10·log10( max over xy ) [dB]"
+    )
+    fig.update_yaxes(title_text=ylabel)
+    suffix = " (kept vs subtracted)" if split_mode else " (pre vs post)"
+    title = f"Stage-2 z-marginal (CLEAN-SC,{suffix})"
     if nz == 1:
         title += " — single z-slice (degenerate)"
     fig.update_layout(title=title, height=500, width=1000)
