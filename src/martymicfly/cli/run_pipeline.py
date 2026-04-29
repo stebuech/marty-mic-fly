@@ -292,6 +292,8 @@ def _emit_array_filter_outputs(
     nx, ny, nz = af["diagnostic_grid_shape"]
     if af["mask_mode"] == "target_box":
         preserved_3d = af["target_box_mask"].reshape(nx, ny, nz)
+    elif af["mask_mode"] == "drone_box":
+        preserved_3d = (~af["drone_box_mask"]).reshape(nx, ny, nz)
     else:
         preserved_3d = (~af["rotor_disc_mask"]).reshape(nx, ny, nz)
     plot_z_marginal(
@@ -314,6 +316,16 @@ def _emit_array_filter_outputs(
         box_center_m=tuple(stage_cfg.target_point_m),
         box_half_extent_m=tuple(stage_cfg.target_box_half_extent_m),
         out_path=str(out_dir / "target_box_slices.html"),
+        rotor_positions=np.asarray(plat["rotor_positions"]),
+    )
+    # Slices through the drone box (always emitted, regardless of mask_mode,
+    # so the drone-side power distribution is always inspectable).
+    plot_target_box_slices(
+        pre_maps=beam_maps_pre,
+        grid_x=grid_x, grid_y=grid_y, grid_z=grid_z,
+        box_center_m=tuple(stage_cfg.drone_box_center_m),
+        box_half_extent_m=tuple(stage_cfg.drone_box_half_extent_m),
+        out_path=str(out_dir / "drone_box_slices.html"),
         rotor_positions=np.asarray(plat["rotor_positions"]),
     )
 

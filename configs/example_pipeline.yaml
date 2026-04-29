@@ -50,6 +50,10 @@ stages:
     #   rotor_disc: subtract cells inside the rotor discs ± rotor_z_tolerance_m
     #     — direct interpretation, useful as a diagnostic when CLEAN-SC actually
     #     resolves the rotors (mid/high bands).
+    #   drone_box: subtract everything INSIDE the drone box (rectangular volume
+    #     around the drone). Wider than rotor_disc and catches the centerline /
+    #     z-smearing that CLEAN-SC produces in the drone vicinity, while
+    #     leaving the external-source region untouched.
     mask_mode: target_box
     # half-extent must be wide enough to capture CLEAN-SC's z-aliases of the
     # external source (the gap_tip ring array can't resolve a source at z=-1.5
@@ -57,6 +61,12 @@ stages:
     # ±0.6 m in z covers both aliases; ±0.3 m in xy captures lateral spread.
     # Drone (z≈0) stays outside the box and is fully subtracted.
     target_box_half_extent_m: [0.3, 0.3, 0.6]
+    # Drone box geometry — covers the rotor plane plus CLEAN-SC's z-smearing.
+    # half_extent xy=0.4 catches the rotor xy positions (±0.23) with margin;
+    # z=±0.5 covers the documented vertical smear (CLEAN-SC drone peaks at
+    # z=-0.55, 0.0, +0.10).
+    drone_box_center_m: [0.0, 0.0, 0.0]
+    drone_box_half_extent_m: [0.4, 0.4, 0.5]
     # Only used when mask_mode = rotor_disc:
     rotor_z_tolerance_m: 0.25
     clean_sc:

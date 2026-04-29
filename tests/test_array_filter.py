@@ -129,6 +129,8 @@ def test_array_filter_mask_mode_switch_keeps_both_masks():
         bands=[BandConfig(name="mid", f_min_hz=500.0, f_max_hz=2000.0)],
         target_point_m=(0.5, 0.0, -0.5),
         target_box_half_extent_m=(0.15, 0.15, 0.15),
+        drone_box_center_m=(0.0, 0.0, 0.0),
+        drone_box_half_extent_m=(0.3, 0.3, 0.2),
         rotor_z_tolerance_m=0.05,
         clean_sc=CleanScConfig(damp=0.6, n_iter=5),
     )
@@ -148,17 +150,23 @@ def test_array_filter_mask_mode_switch_keeps_both_masks():
 
     af_target = run("target_box")
     af_rotor = run("rotor_disc")
+    af_drone_box = run("drone_box")
 
-    for af, expected_mode in ((af_target, "target_box"), (af_rotor, "rotor_disc")):
+    for af, expected_mode in ((af_target, "target_box"),
+                              (af_rotor, "rotor_disc"),
+                              (af_drone_box, "drone_box")):
         assert af["mask_mode"] == expected_mode
         assert af["rotor_disc_mask"].dtype == bool
         assert af["target_box_mask"].dtype == bool
-        assert af["rotor_disc_mask"].shape == af["target_box_mask"].shape
+        assert af["drone_box_mask"].dtype == bool
+        assert af["rotor_disc_mask"].shape == af["target_box_mask"].shape == af["drone_box_mask"].shape
 
     # Active drone_mask alias matches the chosen mode.
     np.testing.assert_array_equal(af_rotor["drone_mask"], af_rotor["rotor_disc_mask"])
     np.testing.assert_array_equal(af_target["drone_mask"], ~af_target["target_box_mask"])
+    np.testing.assert_array_equal(af_drone_box["drone_mask"], af_drone_box["drone_box_mask"])
 
-    # The two modes produce different residuals — sanity check that mask_mode
-    # actually does something downstream.
+    # All three modes produce distinct residuals.
     assert not np.allclose(af_target["residual_csm"], af_rotor["residual_csm"])
+    assert not np.allclose(af_target["residual_csm"], af_drone_box["residual_csm"])
+    assert not np.allclose(af_rotor["residual_csm"], af_drone_box["residual_csm"])

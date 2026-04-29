@@ -162,9 +162,15 @@ class ArrayFilterStageConfig(BaseModel):
     #     Robust against CLEAN-SC mislocalization (centerline beams, side lobes).
     #   - "rotor_disc": subtract cells inside the rotor discs ± rotor_z_tolerance_m.
     #     Direct interpretation but only catches energy CLEAN-SC actually localizes
-    #     onto the rotors — vulnerable to centerline / smearing artefacts.
-    mask_mode: Literal["target_box", "rotor_disc"] = "target_box"
+    #     onto the rotors.
+    #   - "drone_box": subtract cells inside an axis-aligned box around the drone
+    #     (drone_box_center_m ± drone_box_half_extent_m). Wider than rotor_disc
+    #     and catches the centerline / smearing artefacts that CLEAN-SC produces
+    #     in the drone vicinity.
+    mask_mode: Literal["target_box", "rotor_disc", "drone_box"] = "target_box"
     target_box_half_extent_m: tuple[float, float, float] = (0.15, 0.15, 0.15)
+    drone_box_center_m: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    drone_box_half_extent_m: tuple[float, float, float] = (0.6, 0.6, 0.2)
     clean_sc: CleanScConfig = Field(default_factory=CleanScConfig)
 
 

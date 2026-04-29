@@ -134,12 +134,20 @@ class ArrayFilterStage:
             self.cfg.target_point_m,
             self.cfg.target_box_half_extent_m,
         )
+        drone_box_mask = build_target_box_mask(
+            diag_grid,
+            self.cfg.drone_box_center_m,
+            self.cfg.drone_box_half_extent_m,
+        )
 
         # 5. Choose the cells to SUBTRACT (drone-energy):
         #   - rotor_disc: the cells inside the rotor discs.
         #   - target_box: every cell *outside* the target-preserve box.
+        #   - drone_box: every cell *inside* the drone box.
         if self.cfg.mask_mode == "rotor_disc":
             subtract_mask = rotor_disc_mask
+        elif self.cfg.mask_mode == "drone_box":
+            subtract_mask = drone_box_mask
         else:  # "target_box"
             subtract_mask = ~target_box_mask
         drone_csm = reconstruct_csm(
@@ -165,6 +173,7 @@ class ArrayFilterStage:
                 "drone_mask": subtract_mask,
                 "rotor_disc_mask": rotor_disc_mask,
                 "target_box_mask": target_box_mask,
+                "drone_box_mask": drone_box_mask,
                 "mask_mode": self.cfg.mask_mode,
                 "beam_maps": beam_maps,
                 "target_psd_pre": psd_pre,
