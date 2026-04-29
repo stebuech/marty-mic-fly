@@ -235,7 +235,12 @@ def _emit_array_filter_outputs(
     """
     from martymicfly.io.residual_csm_h5 import write_residual_csm
     from martymicfly.eval.array_metrics import compute_array_metrics
-    from martymicfly.eval.array_plots import plot_beam_maps, plot_target_psd, plot_z_marginal
+    from martymicfly.eval.array_plots import (
+        plot_beam_maps,
+        plot_target_box_slices,
+        plot_target_psd,
+        plot_z_marginal,
+    )
     from martymicfly.io.ground_truth_h5 import load_ground_truth
     from martymicfly.processing.array_filter import integrate_band_maps
     from martymicfly.processing.algorithms.base import SourceMap as _SM
@@ -297,6 +302,19 @@ def _emit_array_filter_outputs(
         rotor_z_m=rotor_z,
         target_z_m=float(stage_cfg.target_point_m[2]),
         preserved_mask_3d=preserved_3d,
+    )
+
+    # Three orthogonal slices through the target-box center, per band.
+    grid_x = np.unique(af["diagnostic_grid"][:, 0])
+    grid_y = np.unique(af["diagnostic_grid"][:, 1])
+    grid_z = np.unique(af["diagnostic_grid"][:, 2])
+    plot_target_box_slices(
+        pre_maps=beam_maps_pre,
+        grid_x=grid_x, grid_y=grid_y, grid_z=grid_z,
+        box_center_m=tuple(stage_cfg.target_point_m),
+        box_half_extent_m=tuple(stage_cfg.target_box_half_extent_m),
+        out_path=str(out_dir / "target_box_slices.html"),
+        rotor_positions=np.asarray(plat["rotor_positions"]),
     )
 
     # Target PSD plot + optional ground-truth overlay

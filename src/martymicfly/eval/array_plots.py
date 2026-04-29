@@ -243,3 +243,121 @@ def plot_target_psd(
     fig.update_layout(title="Pseudo-target PSD (pre/post)", height=500, width=1000)
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
     fig.write_html(out_path, include_plotlyjs="cdn")
+
+
+def plot_target_box_slices(
+    pre_maps: dict[str, np.ndarray],
+    grid_x: np.ndarray,
+    grid_y: np.ndarray,
+    grid_z: np.ndarray,
+    box_center_m: tuple[float, float, float],
+    box_half_extent_m: tuple[float, float, float],
+    out_path: str,
+    rotor_positions: np.ndarray | None = None,
+    db_dyn_range: float = 20.0,
+) -> None:
+    """Three orthogonal slices through the target-box center, per band.
+
+    Layout: rows = bands, cols = (xy, xz, yz). Each slice is clipped to the
+    box extent so only the preserved region is shown. Useful for inspecting
+    where CLEAN-SC actually places the external-target energy and how it
+    distributes inside the preservation volume.
+
+    pre_maps: dict[band_name → (nx, ny, nz) ndarray].
+    grid_x, grid_y, grid_z: 1-D coordinate axes used to build the 3D grid.
+    box_center_m / box_half_extent_m: target_box geometry.
+    rotor_positions: optional (3, R) for overlay on the xy slice.
+    """
+    band_names = list(pre_maps.keys())
+    n_bands = len(band_names)
+    cx, cy, cz = box_center_m
+    hx, hy, hz = box_half_extent_m
+
+    ix = int(np.argmin(np.abs(grid_x - cx)))
+    iy = int(np.argmin(np.abs(grid_y - cy)))
+    iz = int(np.argmin(np.abs(grid_z - cz)))
+
+    x_in = (grid_x >= cx - hx) & (grid_x <= cx + hx)
+    y_in = (grid_y >= cy - hy) & (grid_y <= cy + hy)
+    z_in = (grid_z >= cz - hz) & (grid_z <= cz + hz)
+
+    titles = []
+    for n in band_names:
+        titles.extend([
+            f"{n} — xy @ z={grid_z[iz]:.2f}",
+            f"{n} — xz @ y={grid_y[iy]:.2f}",
+            f"{n} — yz @ x={grid_x[ix]:.2f}",
+        ])
+    fig = make_subplots(rows=n_bands, cols=3, subplot_titles=titles,
+                        horizontal_spacing=0.08, vertical_spacing=0.12)
+
+    for ri, name in enumerate(band_names, start=1):
+        m3d = np.maximum(pre_maps[name], 1e-30)
+        peak = float(m3d.max())
+
+        # xy slice
+        xy = m3d[np.ix_(x_in, y_in, [iz])][..., 0]
+        rel_db = 10.0 * np.log10(xy / peak)
+        fig.add_trace(go.Heatmap(
+            x=grid_x[x_in], y=grid_y[y_in], z=rel_db.T,
+            zmin=-db_dyn_range, zmax=0, colorscale="Inferno",
+            showscale=(ri == 1), colorbar=dict(
+                title="dB<br>(rel.<br>peak)", len=0.95, y=0.5, x=1.02),
+        ), row=ri, col=1)
+        fig.update_xaxes(title_text="x [m]", row=ri, col=1)
+        fig.update_yaxes(title_text="y [m]", row=ri, col=1,
+                         scaleanchor=f"x{(ri-1)*3+1}", scaleratio=1)
+        if rotor_positions is not None:
+            in_z = abs(grid_z[iz] - rotor_positions[2, :]) < 0.01
+            if in_z.any():
+                fig.add_trace(go.Scatter(
+                    x=rotor_positions[0, in_z], y=rotor_positions[1, in_z],
+                    mode="markers", marker=dict(color="cyan", size=8, symbol="circle-open"),
+                    hoverinfo="skip", showlegend=False,
+                ), row=ri, col=1)
+        # target marker on xy
+        fig.add_trace(go.Scatter(
+            x=[cx], y=[cy], mode="markers",
+            marker=dict(color="red", size=10, symbol="x"),
+            hoverinfo="skip", showlegend=False,
+        ), row=ri, col=1)
+
+        # xz slice
+        xz = m3d[np.ix_(x_in, [iy], z_in)][:, 0, :]
+        rel_db = 10.0 * np.log10(xz / peak)
+        fig.add_trace(go.Heatmap(
+            x=grid_x[x_in], y=grid_z[z_in], z=rel_db.T,
+            zmin=-db_dyn_range, zmax=0, colorscale="Inferno",
+            showscale=False,
+        ), row=ri, col=2)
+        fig.update_xaxes(title_text="x [m]", row=ri, col=2)
+        fig.update_yaxes(title_text="z [m]", row=ri, col=2)
+        fig.add_trace(go.Scatter(
+            x=[cx], y=[cz], mode="markers",
+            marker=dict(color="red", size=10, symbol="x"),
+            hoverinfo="skip", showlegend=False,
+        ), row=ri, col=2)
+
+        # yz slice
+        yz = m3d[np.ix_([ix], y_in, z_in)][0, :, :]
+        rel_db = 10.0 * np.log10(yz / peak)
+        fig.add_trace(go.Heatmap(
+            x=grid_y[y_in], y=grid_z[z_in], z=rel_db.T,
+            zmin=-db_dyn_range, zmax=0, colorscale="Inferno",
+            showscale=False,
+        ), row=ri, col=3)
+        fig.update_xaxes(title_text="y [m]", row=ri, col=3)
+        fig.update_yaxes(title_text="z [m]", row=ri, col=3)
+        fig.add_trace(go.Scatter(
+            x=[cy], y=[cz], mode="markers",
+            marker=dict(color="red", size=10, symbol="x"),
+            hoverinfo="skip", showlegend=False,
+        ), row=ri, col=3)
+
+    fig.update_layout(
+        title=(f"Stage-2 target-box slices (center=({cx:.2f}, {cy:.2f}, {cz:.2f}), "
+               f"half-extent=({hx:.2f}, {hy:.2f}, {hz:.2f}))"),
+        height=300 * n_bands + 80, width=1500,
+    )
+    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+    fig.write_html(out_path, include_plotlyjs="cdn")

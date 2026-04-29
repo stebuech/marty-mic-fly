@@ -78,6 +78,34 @@ def test_plot_z_marginal_handles_nz1(tmp_path):
     assert out.exists()
 
 
+def test_plot_target_box_slices(tmp_path):
+    from martymicfly.eval.array_plots import plot_target_box_slices
+    nx, ny, nz = 11, 11, 9
+    rng = np.random.default_rng(0)
+    pre = {
+        "low": rng.random((nx, ny, nz)),
+        "mid": rng.random((nx, ny, nz)),
+    }
+    grid_x = np.linspace(-0.5, 0.5, nx)
+    grid_y = np.linspace(-0.5, 0.5, ny)
+    grid_z = np.linspace(-2.0, 0.0, nz)
+    rotor_pos = np.array([[0.2, -0.2], [0.2, -0.2], [0.0, 0.0]])
+    out = tmp_path / "tbox.html"
+    plot_target_box_slices(
+        pre_maps=pre, grid_x=grid_x, grid_y=grid_y, grid_z=grid_z,
+        box_center_m=(0.0, 0.0, -1.5),
+        box_half_extent_m=(0.3, 0.3, 0.6),
+        out_path=str(out),
+        rotor_positions=rotor_pos,
+    )
+    assert out.exists()
+    text = out.read_text()
+    assert "xy @ z=" in text
+    assert "xz @ y=" in text
+    assert "yz @ x=" in text
+    assert "target-box slices" in text
+
+
 def test_plot_z_marginal_split_mode(tmp_path):
     """preserved_mask_3d switches to kept-vs-subtracted view."""
     from martymicfly.eval.array_plots import plot_z_marginal
