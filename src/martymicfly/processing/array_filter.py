@@ -243,4 +243,22 @@ class ArrayFilterStage:
         return replace(ctx, metadata={**ctx.metadata, "array_filter": af_meta})
 
 
-register_stage_builder("array_filter", lambda cfg, **_: ArrayFilterStage(cfg))
+def _array_filter_factory(cfg, **kwargs):
+    """Dispatch to a Track-specific subclass based on which optional Stage-2
+    extension is configured. Lazy imports keep the dependency direction one-way.
+
+    Track A (DOA hemisphere + CLEAN-SC): triggered when ``cfg.doa_grid`` is set.
+    Track B (NNLS on known atoms): triggered when ``cfg.algorithm`` selects the
+    ``known_geometry_lsq`` algorithm. Otherwise fall back to the default
+    Cartesian-grid + CLEAN-SC stage.
+    """
+    if getattr(cfg, "doa_grid", None) is not None:
+        from martymicfly.processing.array_filter_doa import DoaArrayFilterStage
+        return DoaArrayFilterStage(cfg)
+    if getattr(cfg, "algorithm", None) == "known_geometry_lsq":
+        from martymicfly.processing.array_filter_atoms import KnownAtomsArrayFilterStage
+        return KnownAtomsArrayFilterStage(cfg)
+    return ArrayFilterStage(cfg)
+
+
+register_stage_builder("array_filter", _array_filter_factory)
