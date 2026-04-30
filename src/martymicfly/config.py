@@ -144,10 +144,26 @@ class CleanScConfig(BaseModel):
     r_diag: bool = True
 
 
+class AtomSetConfig(BaseModel):
+    """Konfiguration für den Track-B-Algorithmus ``known_geometry_lsq``.
+
+    Atom-Set: alle Rotorpositionen (aus platform metadata) plus eine
+    Zielposition. Optional ein zusätzliches Identity-Atom für diffuses
+    Rauschen, das nicht durch eine spezifische Position erklärt werden kann.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    drone_atoms: Literal["rotor_positions", "subsource_positions"] = "rotor_positions"
+    target_atom_position_m: tuple[float, float, float] | None = None
+    include_diffuse: bool = False
+    ridge: float = 0.0
+    cond_threshold: float = 1e10
+
+
 class ArrayFilterStageConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     kind: Literal["array_filter"]
-    algorithm: Literal["clean_sc"] = "clean_sc"
+    algorithm: Literal["clean_sc", "known_geometry_lsq"] = "clean_sc"
     csm: CsmConfig = Field(default_factory=CsmConfig)
     diagnostic_grid: DiagnosticGridConfig = Field(default_factory=DiagnosticGridConfig)
     bands: list[BandConfig] = Field(default_factory=lambda: [
@@ -172,6 +188,7 @@ class ArrayFilterStageConfig(BaseModel):
     drone_box_center_m: tuple[float, float, float] = (0.0, 0.0, 0.0)
     drone_box_half_extent_m: tuple[float, float, float] = (0.6, 0.6, 0.2)
     clean_sc: CleanScConfig = Field(default_factory=CleanScConfig)
+    atoms: AtomSetConfig | None = None
 
 
 StageConfig = Annotated[
