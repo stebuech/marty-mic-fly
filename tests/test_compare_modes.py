@@ -56,6 +56,103 @@ def test_compare_mask_modes_runs_all_three_on_single_fit():
     assert len(reds) >= 2  # at least two distinct values
 
 
+def test_compare_doa_modes_runs_three_cones_on_single_fit():
+    from martymicfly.cli.compare_modes import compare_doa_modes
+    from martymicfly.config import (
+        ArrayFilterStageConfig, BandConfig, CleanScConfig,
+        CsmConfig, DiagnosticGridConfig, DoaGridConfig,
+    )
+    from martymicfly.io.mic_geom import load_mic_geom_xml
+    from martymicfly.io.synth_h5 import load_synth_h5
+
+    synth = load_synth_h5("tests/fixtures/tiny_synth_mixed.h5")
+    mic_pos = load_mic_geom_xml("tests/fixtures/tiny_geom_4mic.xml")
+    cfg = ArrayFilterStageConfig(
+        kind="array_filter",
+        csm=CsmConfig(nperseg=256, noverlap=128, f_min_hz=200.0, f_max_hz=4000.0),
+        diagnostic_grid=DiagnosticGridConfig(
+            extent_xy_m=0.4, increment_m=0.1, z_min_m=-0.5, z_max_m=0.0,
+        ),
+        bands=[BandConfig(name="mid", f_min_hz=500.0, f_max_hz=2000.0)],
+        target_point_m=(0.0, 0.0, -0.5),
+        clean_sc=CleanScConfig(damp=0.6, n_iter=5),
+        doa_grid=DoaGridConfig(
+            focal_radius_m=0.5, azimuth_step_deg=20.0, elevation_step_deg=20.0,
+            hemisphere="lower",
+        ),
+    )
+    report = compare_doa_modes(
+        time_data=synth["time_data"],
+        sample_rate=synth["sample_rate"],
+        mic_positions=mic_pos,
+        platform=synth["platform"],
+        stage_cfg=cfg,
+    )
+    assert set(report["per_mode"].keys()) == {"rotor_cone", "drone_cone", "target_cone"}
+    for m in report["per_mode"].values():
+        assert "mid" in m["bands"]
+        assert np.isfinite(m["bands"]["mid"]["csm_trace_reduction_db"])
+
+
+def test_compare_nnls_returns_atom_share_localization():
+    from martymicfly.cli.compare_modes import compare_nnls
+    from martymicfly.config import (
+        ArrayFilterStageConfig, AtomSetConfig, BandConfig,
+        CleanScConfig, CsmConfig, DiagnosticGridConfig,
+    )
+    from martymicfly.io.mic_geom import load_mic_geom_xml
+    from martymicfly.io.synth_h5 import load_synth_h5
+
+    synth = load_synth_h5("tests/fixtures/tiny_synth_mixed.h5")
+    mic_pos = load_mic_geom_xml("tests/fixtures/tiny_geom_4mic.xml")
+    cfg = ArrayFilterStageConfig(
+        kind="array_filter",
+        algorithm="known_geometry_lsq",
+        csm=CsmConfig(nperseg=256, noverlap=128, f_min_hz=200.0, f_max_hz=4000.0),
+        diagnostic_grid=DiagnosticGridConfig(
+            extent_xy_m=0.4, increment_m=0.1, z_min_m=-0.5, z_max_m=0.0,
+        ),
+        bands=[BandConfig(name="mid", f_min_hz=500.0, f_max_hz=2000.0)],
+        target_point_m=(0.0, 0.0, -0.5),
+        clean_sc=CleanScConfig(damp=0.6, n_iter=5),
+        atoms=AtomSetConfig(),
+    )
+    report = compare_nnls(
+        time_data=synth["time_data"],
+        sample_rate=synth["sample_rate"],
+        mic_positions=mic_pos,
+        platform=synth["platform"],
+        stage_cfg=cfg,
+    )
+    assert "nnls" in report["per_mode"]
+    assert report["localization"]["kind"] == "nnls_atom_powers"
+    band = report["localization"]["bands"]["mid"]
+    assert "drone_db" in band and "target_db" in band
+
+
+def test_compare_modes_classifier_dispatches_correctly():
+    from martymicfly.cli.compare_modes import _classify_method
+    from martymicfly.config import (
+        ArrayFilterStageConfig, AtomSetConfig, BandConfig, CleanScConfig,
+        CsmConfig, DiagnosticGridConfig, DoaGridConfig,
+    )
+    base = dict(
+        kind="array_filter",
+        csm=CsmConfig(),
+        diagnostic_grid=DiagnosticGridConfig(z_min_m=0.0, z_max_m=0.0),
+        bands=[BandConfig(name="b", f_min_hz=200.0, f_max_hz=2000.0)],
+        target_point_m=(0.0, 0.0, -0.5),
+        clean_sc=CleanScConfig(),
+    )
+    cart = ArrayFilterStageConfig(**base)
+    doa = ArrayFilterStageConfig(**base, doa_grid=DoaGridConfig())
+    nnls = ArrayFilterStageConfig(**base, algorithm="known_geometry_lsq",
+                                   atoms=AtomSetConfig())
+    assert _classify_method(cart) == "cartesian"
+    assert _classify_method(doa) == "doa"
+    assert _classify_method(nnls) == "nnls"
+
+
 def test_compare_mask_modes_subset_of_modes():
     from martymicfly.cli.compare_modes import compare_mask_modes
     from martymicfly.config import (
