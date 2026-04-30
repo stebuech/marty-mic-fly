@@ -220,6 +220,223 @@ def plot_z_marginal(
     fig.write_html(out_path, include_plotlyjs="cdn")
 
 
+def plot_doa_heatmaps(
+    pre_maps: dict[str, np.ndarray],          # band -> (n_az, n_el, 1)
+    post_maps: dict[str, np.ndarray],         # band -> (n_az, n_el, 1)
+    n_az: int,
+    n_el: int,
+    hemisphere: str,                          # "lower" | "upper" | "full"
+    rotor_positions: np.ndarray | None,       # (3, R) — for DOA markers
+    target_xyz_m: tuple[float, float, float], # target source point — for DOA marker
+    out_path: str,
+    db_dyn_range: float = 20.0,
+) -> None:
+    """Per-band azimuth/elevation heatmaps for the DOA hemisphere stage.
+
+    The grid layout follows ``build_doa_grid``: meshgrid(indexing='ij') with
+    ravel index = i_az * n_el + i_el. Pre/post sit side by side per band.
+    Rotor and target directions are overlaid as markers (DOAs from the
+    array center).
+    """
+    band_names = list(pre_maps.keys())
+    if hemisphere == "lower":
+        el_min, el_max = -90.0, 0.0
+    elif hemisphere == "upper":
+        el_min, el_max = 0.0, 90.0
+    else:
+        el_min, el_max = -90.0, 90.0
+    az_axis = np.linspace(0.0, 360.0, n_az, endpoint=False)
+    el_axis = np.linspace(el_min, el_max, n_el)
+
+    def _direction_to_az_el(xyz: np.ndarray) -> tuple[float, float] | None:
+        v = np.asarray(xyz, dtype=np.float64).reshape(3)
+        norm = float(np.linalg.norm(v))
+        if norm < 1e-9:
+            return None
+        v = v / norm
+        el = float(np.degrees(np.arcsin(v[2])))
+        az = float(np.degrees(np.arctan2(v[1], v[0])))
+        if az < 0.0:
+            az += 360.0
+        return az, el
+
+    rotor_doas: list[tuple[float, float]] = []
+    if rotor_positions is not None:
+        for i in range(rotor_positions.shape[1]):
+            d = _direction_to_az_el(rotor_positions[:, i])
+            if d is not None:
+                rotor_doas.append(d)
+    target_doa = _direction_to_az_el(np.asarray(target_xyz_m))
+
+    titles = (
+        [f"pre — {n}" for n in band_names]
+        + [f"post — {n}" for n in band_names]
+    )
+    fig = make_subplots(rows=2, cols=len(band_names), subplot_titles=titles,
+                        horizontal_spacing=0.06, vertical_spacing=0.10)
+
+    def _to_2d(arr: np.ndarray) -> np.ndarray:
+        # incoming shape is (n_az, n_el, 1) per the DOA reshape_hint convention
+        if arr.ndim == 3:
+            return arr.reshape(arr.shape[0], arr.shape[1])
+        return arr
+
+    for col, name in enumerate(band_names, start=1):
+        for row, source in enumerate((pre_maps, post_maps), start=1):
+            m2d = np.maximum(_to_2d(source[name]), 1e-30)
+            peak = float(m2d.max())
+            rel_db = 10.0 * np.log10(m2d / peak)
+            fig.add_trace(go.Heatmap(
+                x=az_axis, y=el_axis, z=rel_db.T,   # transpose so y=el rows
+                zmin=-db_dyn_range, zmax=0.0, colorscale="Inferno",
+                showscale=(col == len(band_names) and row == 1),
+                colorbar=dict(title="dB<br>(rel.<br>peak)", len=0.95, y=0.5, x=1.01),
+                hovertemplate="az=%{x:.0f}°<br>el=%{y:.0f}°<br>rel=%{z:.1f} dB<extra></extra>",
+            ), row=row, col=col)
+            if rotor_doas:
+                fig.add_trace(go.Scatter(
+                    x=[d[0] for d in rotor_doas], y=[d[1] for d in rotor_doas],
+                    mode="markers",
+                    marker=dict(color="cyan", size=10, symbol="circle-open",
+                                line=dict(width=2)),
+                    hoverinfo="skip", showlegend=False,
+                ), row=row, col=col)
+            if target_doa is not None:
+                fig.add_trace(go.Scatter(
+                    x=[target_doa[0]], y=[target_doa[1]],
+                    mode="markers", marker=dict(color="red", size=12, symbol="x"),
+                    hoverinfo="skip", showlegend=False,
+                ), row=row, col=col)
+            fig.update_xaxes(range=[0, 360], title_text="Azimuth [°]",
+                             row=row, col=col)
+            fig.update_yaxes(range=[el_min, el_max], title_text="Elevation [°]",
+                             row=row, col=col)
+
+    fig.update_layout(
+        title=f"Stage-2 DOA heatmaps ({hemisphere} hemisphere, CLEAN-SC, pre vs post)",
+        height=900, width=1500,
+    )
+    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+    fig.write_html(out_path, include_plotlyjs="cdn")
+
+
+def plot_doa_polar_skymap(
+    pre_maps: dict[str, np.ndarray],          # band -> (n_az, n_el, 1)
+    n_az: int,
+    n_el: int,
+    hemisphere: str,
+    rotor_positions: np.ndarray | None,
+    target_xyz_m: tuple[float, float, float],
+    out_path: str,
+    db_dyn_range: float = 20.0,
+) -> None:
+    """Polar skymap projection: looking 'down' onto the lower hemisphere
+    (or 'up' onto the upper one). Radius = cos(|elevation|), so the nadir
+    or zenith sits at the center; the equator at the rim.
+
+    One panel per band (pre only — post tends to look similar after
+    subtraction and is busier than informative in skymap form).
+    """
+    if hemisphere == "lower":
+        el_min, el_max = -90.0, 0.0
+    elif hemisphere == "upper":
+        el_min, el_max = 0.0, 90.0
+    else:
+        el_min, el_max = -90.0, 90.0
+    az_axis = np.linspace(0.0, 360.0, n_az, endpoint=False)
+    el_axis = np.linspace(el_min, el_max, n_el)
+
+    band_names = list(pre_maps.keys())
+    fig = make_subplots(
+        rows=1, cols=len(band_names),
+        specs=[[{"type": "polar"}] * len(band_names)],
+        subplot_titles=[f"pre — {n}" for n in band_names],
+        horizontal_spacing=0.10,
+    )
+
+    # Build per-cell az (degrees) and r (= |sin(el)| → 0 at pole, 1 at equator
+    # for lower; for full, 1 at the equator and 0 at both poles).
+    AZ, EL = np.meshgrid(az_axis, el_axis, indexing="ij")
+    r_grid = np.cos(np.deg2rad(EL))   # 0 at pole, 1 at equator
+
+    def _map_dir_to_polar(xyz: np.ndarray) -> tuple[float, float] | None:
+        v = np.asarray(xyz, dtype=np.float64).reshape(3)
+        norm = float(np.linalg.norm(v))
+        if norm < 1e-9:
+            return None
+        v = v / norm
+        el = float(np.degrees(np.arcsin(v[2])))
+        az = float(np.degrees(np.arctan2(v[1], v[0])))
+        if az < 0.0:
+            az += 360.0
+        if hemisphere == "lower" and el > 0:
+            return None
+        if hemisphere == "upper" and el < 0:
+            return None
+        return az, float(np.cos(np.deg2rad(el)))
+
+    rotor_polar: list[tuple[float, float]] = []
+    if rotor_positions is not None:
+        for i in range(rotor_positions.shape[1]):
+            p = _map_dir_to_polar(rotor_positions[:, i])
+            if p is not None:
+                rotor_polar.append(p)
+    target_polar = _map_dir_to_polar(np.asarray(target_xyz_m))
+
+    for col, name in enumerate(band_names, start=1):
+        m = pre_maps[name]
+        if m.ndim == 3:
+            m = m.reshape(m.shape[0], m.shape[1])
+        m = np.maximum(m, 1e-30)
+        peak = float(m.max())
+        rel_db = 10.0 * np.log10(m / peak)
+        rel_db = np.maximum(rel_db, -db_dyn_range)
+        # Render as scattered markers — plotly polar heatmap support is
+        # limited; markers sized & colored by power give a passable skymap
+        # without bringing in shapely or matplotlib.
+        fig.add_trace(go.Scatterpolar(
+            r=r_grid.ravel(), theta=AZ.ravel(),
+            mode="markers",
+            marker=dict(
+                color=rel_db.ravel(), colorscale="Inferno",
+                cmin=-db_dyn_range, cmax=0.0,
+                size=8, opacity=0.8,
+                showscale=(col == len(band_names)),
+                colorbar=dict(title="dB<br>(rel.<br>peak)", len=0.85, y=0.5,
+                              x=1.02) if col == len(band_names) else None,
+            ),
+            hovertemplate=("az=%{theta:.0f}°<br>r=%{r:.2f} (cos|el|)"
+                           "<br>rel=%{marker.color:.1f} dB<extra></extra>"),
+            showlegend=False,
+        ), row=1, col=col)
+        if rotor_polar:
+            fig.add_trace(go.Scatterpolar(
+                r=[p[1] for p in rotor_polar], theta=[p[0] for p in rotor_polar],
+                mode="markers",
+                marker=dict(color="cyan", size=14, symbol="circle-open",
+                            line=dict(width=2)),
+                hoverinfo="skip", showlegend=False,
+            ), row=1, col=col)
+        if target_polar is not None:
+            fig.add_trace(go.Scatterpolar(
+                r=[target_polar[1]], theta=[target_polar[0]],
+                mode="markers", marker=dict(color="red", size=16, symbol="x"),
+                hoverinfo="skip", showlegend=False,
+            ), row=1, col=col)
+
+    fig.update_layout(
+        title=f"Stage-2 DOA skymap ({hemisphere}; "
+              "center=pole, rim=equator; cyan=rotor DOA, red=target DOA)",
+        height=600, width=1500,
+    )
+    fig.update_polars(
+        radialaxis=dict(range=[0, 1.05], showticklabels=False),
+        angularaxis=dict(direction="counterclockwise", rotation=0),
+    )
+    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+    fig.write_html(out_path, include_plotlyjs="cdn")
+
+
 def plot_target_psd(
     frequencies: np.ndarray,
     psd_pre: np.ndarray,

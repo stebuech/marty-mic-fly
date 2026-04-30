@@ -335,10 +335,33 @@ def _emit_array_filter_outputs(
             rotor_positions=np.asarray(plat["rotor_positions"]),
         )
     else:
+        # DOA grid: emit polar/azimuth-elevation heatmaps instead of volumetric.
+        from martymicfly.eval.array_plots import (
+            plot_doa_heatmaps,
+            plot_doa_polar_skymap,
+        )
+        n_az, n_el, _ = af["diagnostic_grid_shape"]
+        plot_doa_heatmaps(
+            beam_maps_pre, beam_maps_post,
+            n_az=n_az, n_el=n_el,
+            hemisphere=stage_cfg.doa_grid.hemisphere,
+            rotor_positions=np.asarray(plat["rotor_positions"]),
+            target_xyz_m=tuple(stage_cfg.target_point_m),
+            out_path=str(out_dir / "doa_heatmaps.html"),
+        )
+        plot_doa_polar_skymap(
+            beam_maps_pre,
+            n_az=n_az, n_el=n_el,
+            hemisphere=stage_cfg.doa_grid.hemisphere,
+            rotor_positions=np.asarray(plat["rotor_positions"]),
+            target_xyz_m=tuple(stage_cfg.target_point_m),
+            out_path=str(out_dir / "doa_skymap.html"),
+        )
         log.info(
-            "DOA grid detected (focal_radius=%.2fm); skipping volumetric "
-            "Cartesian plots — only target_psd.html will be emitted.",
+            "DOA grid (focal_radius=%.2fm, hemisphere=%s) — emitted "
+            "doa_heatmaps.html and doa_skymap.html.",
             stage_cfg.doa_grid.focal_radius_m,
+            stage_cfg.doa_grid.hemisphere,
         )
 
     # Target PSD plot + optional ground-truth overlay
