@@ -17,6 +17,7 @@ from typing import Iterable, Optional
 import numpy as np
 
 from martymicfly.config import ArrayFilterStageConfig, BandConfig
+from martymicfly.processing.algorithms.base import SourceMap
 from martymicfly.processing.array_filter import ArrayFilterStage
 from martymicfly.processing.pipeline import PipelineContext
 
@@ -33,6 +34,68 @@ def _z_quantile(z_unique: np.ndarray, z_marg: np.ndarray, q: float) -> float:
     cum = np.cumsum(z_marg / z_marg.sum())
     idx = int(np.searchsorted(cum, q))
     return float(z_unique[min(idx, z_unique.size - 1)])
+
+
+def localization_stats_from_source_map(
+    *,
+    source_map: SourceMap,
+    grid_positions: np.ndarray,        # (G, 3)
+    grid_shape: tuple[int, int, int],
+    bands: Iterable,
+    target_xyz_m: tuple[float, float, float],
+    z_tolerance_m: float = 0.10,
+    drone_z_tolerance_m: float = 0.10,
+) -> dict:
+    """Compute the per-band localization report from an already-fit source_map.
+
+    Useful when you want to reuse a single CLEAN-SC fit across multiple
+    downstream analyses (e.g. mask-mode comparisons) without re-running the
+    expensive deconvolution.
+    """
+    freqs = source_map.frequencies
+    z_unique = np.unique(grid_positions[:, 2])
+    target_z = float(target_xyz_m[2])
+
+    out_bands: dict = {}
+    for band in _band_iter(bands):
+        fmask = (freqs >= band.f_min_hz) & (freqs <= band.f_max_hz)
+        if not fmask.any():
+            continue
+        p = source_map.powers[fmask].sum(axis=0)
+        p = np.where(np.isfinite(p), p, 0.0)
+        p = np.maximum(p, 0.0)
+        total = float(p.sum())
+        if total <= 0.0:
+            out_bands[band.name] = {
+                "peak_xyz_m": (np.nan, np.nan, np.nan),
+                "z_span_10_90_m": (np.nan, np.nan),
+                "frac_at_target_z": 0.0,
+                "frac_at_drone_z": 0.0,
+                "total_power": 0.0,
+            }
+            continue
+        ix = int(np.argmax(p))
+        peak = grid_positions[ix]
+        z_marg = np.array([p[grid_positions[:, 2] == z].sum() for z in z_unique])
+        z10 = _z_quantile(z_unique, z_marg, 0.10)
+        z90 = _z_quantile(z_unique, z_marg, 0.90)
+        near_target = np.abs(z_unique - target_z) <= z_tolerance_m
+        near_drone = np.abs(z_unique) <= drone_z_tolerance_m
+        out_bands[band.name] = {
+            "peak_xyz_m": (float(peak[0]), float(peak[1]), float(peak[2])),
+            "z_span_10_90_m": (z10, z90),
+            "frac_at_target_z": float(z_marg[near_target].sum() / total),
+            "frac_at_drone_z": float(z_marg[near_drone].sum() / total),
+            "total_power": total,
+        }
+
+    return {
+        "grid_shape": tuple(int(s) for s in grid_shape),
+        "target_xyz_m": tuple(float(v) for v in target_xyz_m),
+        "z_tolerance_m": float(z_tolerance_m),
+        "drone_z_tolerance_m": float(drone_z_tolerance_m),
+        "bands": out_bands,
+    }
 
 
 def probe_clean_sc_localization(
@@ -75,53 +138,15 @@ def probe_clean_sc_localization(
         metadata={"platform": platform},
     )
     af = ArrayFilterStage(stage_cfg).process(ctx).metadata["array_filter"]
-    sm = af["source_map"]
-    grid = af["diagnostic_grid"]   # (G, 3)
-    grid_shape = af["diagnostic_grid_shape"]
-    freqs = sm.frequencies
-    z_unique = np.unique(grid[:, 2])
-
-    target_z = float(target_xyz_m[2])
-    out_bands: dict = {}
-    for band in _band_iter(stage_cfg.bands):
-        fmask = (freqs >= band.f_min_hz) & (freqs <= band.f_max_hz)
-        if not fmask.any():
-            continue
-        p = sm.powers[fmask].sum(axis=0)                  # (G,)
-        p = np.where(np.isfinite(p), p, 0.0)
-        p = np.maximum(p, 0.0)
-        total = float(p.sum())
-        if total <= 0.0:
-            out_bands[band.name] = {
-                "peak_xyz_m": (np.nan, np.nan, np.nan),
-                "z_span_10_90_m": (np.nan, np.nan),
-                "frac_at_target_z": 0.0,
-                "frac_at_drone_z": 0.0,
-                "total_power": 0.0,
-            }
-            continue
-        ix = int(np.argmax(p))
-        peak = grid[ix]
-        z_marg = np.array([p[grid[:, 2] == z].sum() for z in z_unique])
-        z10 = _z_quantile(z_unique, z_marg, 0.10)
-        z90 = _z_quantile(z_unique, z_marg, 0.90)
-        near_target = np.abs(z_unique - target_z) <= z_tolerance_m
-        near_drone = np.abs(z_unique) <= drone_z_tolerance_m
-        out_bands[band.name] = {
-            "peak_xyz_m": (float(peak[0]), float(peak[1]), float(peak[2])),
-            "z_span_10_90_m": (z10, z90),
-            "frac_at_target_z": float(z_marg[near_target].sum() / total),
-            "frac_at_drone_z": float(z_marg[near_drone].sum() / total),
-            "total_power": total,
-        }
-
-    return {
-        "grid_shape": tuple(int(s) for s in grid_shape),
-        "target_xyz_m": tuple(float(v) for v in target_xyz_m),
-        "z_tolerance_m": float(z_tolerance_m),
-        "drone_z_tolerance_m": float(drone_z_tolerance_m),
-        "bands": out_bands,
-    }
+    return localization_stats_from_source_map(
+        source_map=af["source_map"],
+        grid_positions=af["diagnostic_grid"],
+        grid_shape=af["diagnostic_grid_shape"],
+        bands=stage_cfg.bands,
+        target_xyz_m=target_xyz_m,
+        z_tolerance_m=z_tolerance_m,
+        drone_z_tolerance_m=drone_z_tolerance_m,
+    )
 
 
 def format_localization_report(report: dict) -> str:
