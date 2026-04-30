@@ -15,3 +15,4 @@ def register_algorithm(cls: type[Algorithm]) -> type[Algorithm]:
 
 
 from martymicfly.processing.algorithms import clean_sc as _  # noqa: F401, E402
+from martymicfly.processing.algorithms import known_geometry_lsq as _kg  # noqa: F401, E402

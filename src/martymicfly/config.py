@@ -167,10 +167,26 @@ class DoaGridConfig(BaseModel):
     drone_cone_half_angle_deg: float = Field(default=45.0, gt=0.0, le=180.0)
 
 
+class AtomSetConfig(BaseModel):
+    """Konfiguration für den Track-B-Algorithmus ``known_geometry_lsq``.
+
+    Atom-Set: alle Rotorpositionen (aus platform metadata) plus eine
+    Zielposition. Optional ein zusätzliches Identity-Atom für diffuses
+    Rauschen, das nicht durch eine spezifische Position erklärt werden kann.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    drone_atoms: Literal["rotor_positions", "subsource_positions"] = "rotor_positions"
+    target_atom_position_m: tuple[float, float, float] | None = None
+    include_diffuse: bool = False
+    ridge: float = 0.0
+    cond_threshold: float = 1e10
+
+
 class ArrayFilterStageConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     kind: Literal["array_filter"]
-    algorithm: Literal["clean_sc"] = "clean_sc"
+    algorithm: Literal["clean_sc", "known_geometry_lsq"] = "clean_sc"
     csm: CsmConfig = Field(default_factory=CsmConfig)
     diagnostic_grid: DiagnosticGridConfig = Field(default_factory=DiagnosticGridConfig)
     bands: list[BandConfig] = Field(default_factory=lambda: [
@@ -201,6 +217,10 @@ class ArrayFilterStageConfig(BaseModel):
     # Track A — DOA hemisphere grid. When set, the stage factory dispatches
     # to DoaArrayFilterStage and mask_mode must be one of the cone variants.
     doa_grid: DoaGridConfig | None = None
+    # Track B — known-geometry NNLS. Active when algorithm == 'known_geometry_lsq';
+    # the factory dispatches to KnownAtomsArrayFilterStage. The atoms block is
+    # optional (defaults are reasonable for the AP2-A platform).
+    atoms: AtomSetConfig | None = None
 
 
 StageConfig = Annotated[

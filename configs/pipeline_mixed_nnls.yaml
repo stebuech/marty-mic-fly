@@ -1,0 +1,77 @@
+input:
+  audio_h5: /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/ap2a_synth_mixed_gaptip.h5
+  mic_geom_xml: /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/mic_geom.xml
+  ground_truth_h5: /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/ap2a_synth_mixed_gaptip_gt.h5
+
+segment:
+  mode: middle
+  duration: 10.0
+
+channels:
+  selection: all
+
+rotor:
+  n_blades: 2
+  n_harmonics: 13
+
+# Track-B run on the mixed synth file (drone + external source).
+# Stage 1 notch attenuates the BPF tones; Stage 2 NNLS-on-atoms then
+# decomposes the residual broadband CSM into per-atom powers. The
+# target_psd_post should be closer to the GT external-source PSD —
+# especially in the low band where CLEAN-SC mislocalizes.
+stages:
+  - kind: notch
+    pole_radius:
+      mode: scalar
+      value: 0.9996
+    multichannel: false
+    block_size: 4096
+
+  - kind: array_filter
+    algorithm: known_geometry_lsq
+    csm:
+      nperseg: 512
+      noverlap: 256
+      window: hann
+      diag_loading_rel: 1.0e-6
+      f_min_hz: 200.0
+      f_max_hz: 6000.0
+    diagnostic_grid:
+      extent_xy_m: 0.5
+      increment_m: 0.05
+      z_min_m: 0.0
+      z_max_m: 0.0
+    bands:
+      - { name: low,  f_min_hz: 200.0,  f_max_hz: 500.0 }
+      - { name: mid,  f_min_hz: 500.0,  f_max_hz: 2000.0 }
+      - { name: high, f_min_hz: 2000.0, f_max_hz: 6000.0 }
+    target_point_m: [0.0, 0.0, -1.5]
+    rotor_z_tolerance_m: 0.05
+    atoms:
+      drone_atoms: rotor_positions
+      include_diffuse: false
+      ridge: 0.0
+      cond_threshold: 1.0e10
+
+metrics:
+  welch_nperseg: 8192
+  welch_noverlap: 4096
+  bandwidth_factor: 1.0
+  broadband_low_hz: null
+
+plots:
+  # Disabled for atoms-stage: array_plots assumes a Cartesian (nx, ny, nz)
+  # grid for beam-map marginals; the NNLS atom-set output is (G, 1, 1) and
+  # would mis-reshape. Metrics + filtered.h5 are the primary deliverables.
+  enabled: false
+  fmax_hz: null
+  spectrogram_window: 4096
+  spectrogram_overlap: 2048
+  channel_subset: null
+
+output:
+  dir: results/pipeline/mixed_nnls_{run_id}
+  filtered_h5: filtered.h5
+  metrics_json: metrics.json
+  plots_subdir: plots
+  copy_config: true
