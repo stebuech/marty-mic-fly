@@ -51,6 +51,7 @@ def compose_external(
     out_synth_path: str,
     out_gt_path: str,
     speed_of_sound: float = SPEED_OF_SOUND,
+    include_drone: bool = True,
 ) -> None:
     art = load_source_artifact(artifact_path)
     mic_pos = load_mic_geom_xml(mic_geom_path)
@@ -62,13 +63,16 @@ def compose_external(
             f"but artifact only has {art.subsource_signals.shape[1]}"
         )
 
-    drone_at_mics = greens_propagate(
-        art.subsource_signals[:, :n_samples],
-        art.subsource_positions,
-        mic_pos,
-        art.sample_rate,
-        speed_of_sound,
-    )
+    if include_drone:
+        drone_at_mics = greens_propagate(
+            art.subsource_signals[:, :n_samples],
+            art.subsource_positions,
+            mic_pos,
+            art.sample_rate,
+            speed_of_sound,
+        )
+    else:
+        drone_at_mics = np.zeros((n_samples, mic_pos.shape[0]), dtype=np.float64)
 
     ext_signal = generate_external_signal(ext_spec, art.sample_rate, n_samples)
     ext_at_mics = greens_propagate(

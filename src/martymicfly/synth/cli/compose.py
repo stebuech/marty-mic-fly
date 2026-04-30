@@ -29,6 +29,7 @@ class _ComposeAppConfig(BaseModel):
     input: _ComposeInput
     external: ExternalSourceSpec
     output: _ComposeOutput
+    include_drone: bool = True
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -45,6 +46,7 @@ def main(argv: list[str] | None = None) -> int:
         cfg.external,
         cfg.output.synth_h5,
         cfg.output.ground_truth_h5,
+        include_drone=cfg.include_drone,
     )
     logging.getLogger("martymicfly.compose").info(
         "wrote %s and %s", cfg.output.synth_h5, cfg.output.ground_truth_h5
