@@ -271,63 +271,75 @@ def _emit_array_filter_outputs(
     beam_maps_post = integrate_band_maps(post_full_sm, stage_cfg.bands, af["diagnostic_grid_shape"])
 
     plat = ctx.metadata["platform"]
-    plot_beam_maps(
-        beam_maps_pre, beam_maps_post,
-        extent_xy_m=stage_cfg.diagnostic_grid.extent_xy_m,
-        rotor_positions=np.asarray(plat["rotor_positions"]),
-        rotor_radii=np.asarray(plat["rotor_radii"]),
-        mic_positions=ctx.mic_positions,
-        target_xy_m=(stage_cfg.target_point_m[0], stage_cfg.target_point_m[1]),
-        out_path=str(out_dir / "beam_maps.html"),
-    )
 
-    # z-marginal plot: altitude profile of pre/post peak power per band.
-    # Use the resolved diagnostic-grid z-axis (in case z_min/z_max were None and
-    # ArrayFilterStage filled them in from platform.rotor_positions[2,0]).
-    z_values = np.unique(af["diagnostic_grid"][:, 2])
-    rotor_z = float(np.asarray(plat["rotor_positions"])[2, 0])
-    # Build the per-cell preservation mask (cells NOT subtracted from CSM).
-    # In target_box mode this is the box itself; in rotor_disc mode it's
-    # everything outside the rotor discs.
-    nx, ny, nz = af["diagnostic_grid_shape"]
-    if af["mask_mode"] == "target_box":
-        preserved_3d = af["target_box_mask"].reshape(nx, ny, nz)
-    elif af["mask_mode"] == "drone_box":
-        preserved_3d = (~af["drone_box_mask"]).reshape(nx, ny, nz)
+    # Volumetric Cartesian plots only make sense when the search space is a
+    # 3D Cartesian grid. The DOA hemisphere stage produces a (n_az, n_el, 1)
+    # reshape_hint and lives on a focal sphere — those plots get skipped here
+    # (a polar emission plot is a future addition).
+    is_cartesian_grid = stage_cfg.doa_grid is None
+    if is_cartesian_grid:
+        plot_beam_maps(
+            beam_maps_pre, beam_maps_post,
+            extent_xy_m=stage_cfg.diagnostic_grid.extent_xy_m,
+            rotor_positions=np.asarray(plat["rotor_positions"]),
+            rotor_radii=np.asarray(plat["rotor_radii"]),
+            mic_positions=ctx.mic_positions,
+            target_xy_m=(stage_cfg.target_point_m[0], stage_cfg.target_point_m[1]),
+            out_path=str(out_dir / "beam_maps.html"),
+        )
+
+        # z-marginal plot: altitude profile of pre/post peak power per band.
+        # Use the resolved diagnostic-grid z-axis (in case z_min/z_max were
+        # None and ArrayFilterStage filled them in from
+        # platform.rotor_positions[2,0]).
+        z_values = np.unique(af["diagnostic_grid"][:, 2])
+        rotor_z = float(np.asarray(plat["rotor_positions"])[2, 0])
+        # Build the per-cell preservation mask (cells NOT subtracted from CSM).
+        nx, ny, nz = af["diagnostic_grid_shape"]
+        if af["mask_mode"] == "target_box":
+            preserved_3d = af["target_box_mask"].reshape(nx, ny, nz)
+        elif af["mask_mode"] == "drone_box":
+            preserved_3d = (~af["drone_box_mask"]).reshape(nx, ny, nz)
+        else:
+            preserved_3d = (~af["rotor_disc_mask"]).reshape(nx, ny, nz)
+        plot_z_marginal(
+            beam_maps_pre, beam_maps_post,
+            z_values=z_values,
+            bpfs=[],
+            out_path=str(out_dir / "z_marginal.html"),
+            rotor_z_m=rotor_z,
+            target_z_m=float(stage_cfg.target_point_m[2]),
+            preserved_mask_3d=preserved_3d,
+        )
+
+        # Three orthogonal slices through the target-box center, per band.
+        grid_x = np.unique(af["diagnostic_grid"][:, 0])
+        grid_y = np.unique(af["diagnostic_grid"][:, 1])
+        grid_z = np.unique(af["diagnostic_grid"][:, 2])
+        plot_target_box_slices(
+            pre_maps=beam_maps_pre,
+            grid_x=grid_x, grid_y=grid_y, grid_z=grid_z,
+            box_center_m=tuple(stage_cfg.target_point_m),
+            box_half_extent_m=tuple(stage_cfg.target_box_half_extent_m),
+            out_path=str(out_dir / "target_box_slices.html"),
+            rotor_positions=np.asarray(plat["rotor_positions"]),
+        )
+        # Slices through the drone box (always emitted, regardless of mask_mode,
+        # so the drone-side power distribution is always inspectable).
+        plot_target_box_slices(
+            pre_maps=beam_maps_pre,
+            grid_x=grid_x, grid_y=grid_y, grid_z=grid_z,
+            box_center_m=tuple(stage_cfg.drone_box_center_m),
+            box_half_extent_m=tuple(stage_cfg.drone_box_half_extent_m),
+            out_path=str(out_dir / "drone_box_slices.html"),
+            rotor_positions=np.asarray(plat["rotor_positions"]),
+        )
     else:
-        preserved_3d = (~af["rotor_disc_mask"]).reshape(nx, ny, nz)
-    plot_z_marginal(
-        beam_maps_pre, beam_maps_post,
-        z_values=z_values,
-        bpfs=[],
-        out_path=str(out_dir / "z_marginal.html"),
-        rotor_z_m=rotor_z,
-        target_z_m=float(stage_cfg.target_point_m[2]),
-        preserved_mask_3d=preserved_3d,
-    )
-
-    # Three orthogonal slices through the target-box center, per band.
-    grid_x = np.unique(af["diagnostic_grid"][:, 0])
-    grid_y = np.unique(af["diagnostic_grid"][:, 1])
-    grid_z = np.unique(af["diagnostic_grid"][:, 2])
-    plot_target_box_slices(
-        pre_maps=beam_maps_pre,
-        grid_x=grid_x, grid_y=grid_y, grid_z=grid_z,
-        box_center_m=tuple(stage_cfg.target_point_m),
-        box_half_extent_m=tuple(stage_cfg.target_box_half_extent_m),
-        out_path=str(out_dir / "target_box_slices.html"),
-        rotor_positions=np.asarray(plat["rotor_positions"]),
-    )
-    # Slices through the drone box (always emitted, regardless of mask_mode,
-    # so the drone-side power distribution is always inspectable).
-    plot_target_box_slices(
-        pre_maps=beam_maps_pre,
-        grid_x=grid_x, grid_y=grid_y, grid_z=grid_z,
-        box_center_m=tuple(stage_cfg.drone_box_center_m),
-        box_half_extent_m=tuple(stage_cfg.drone_box_half_extent_m),
-        out_path=str(out_dir / "drone_box_slices.html"),
-        rotor_positions=np.asarray(plat["rotor_positions"]),
-    )
+        log.info(
+            "DOA grid detected (focal_radius=%.2fm); skipping volumetric "
+            "Cartesian plots — only target_psd.html will be emitted.",
+            stage_cfg.doa_grid.focal_radius_m,
+        )
 
     # Target PSD plot + optional ground-truth overlay
     bpfs: list[float] = []  # left empty (could be derived from per_motor_bpf)

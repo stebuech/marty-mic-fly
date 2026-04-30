@@ -1,0 +1,87 @@
+input:
+  audio_h5: /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/ap2a_synth_external_only_gaptip.h5
+  mic_geom_xml: /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/mic_geom.xml
+  ground_truth_h5: /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/ap2a_synth_external_only_gaptip_gt.h5
+
+segment:
+  mode: middle
+  duration: 10.0
+
+channels:
+  selection: all
+
+rotor:
+  n_blades: 2
+  n_harmonics: 13
+
+# Methodology reference: external-only synth + DOA hemisphere search space.
+# The proposal explicitly specifies "räumliche Filterung nach der Einfalls-
+# richtung (DOA)". This config matches that wording — CLEAN-SC discriminates
+# only by direction on a focal sphere, not by 3D position.
+#
+# Notch stage omitted: input has no drone harmonics, so it would be a no-op.
+stages:
+  - kind: array_filter
+    algorithm: clean_sc
+    csm:
+      nperseg: 512
+      noverlap: 256
+      window: hann
+      diag_loading_rel: 1.0e-6
+      f_min_hz: 200.0
+      f_max_hz: 6000.0
+    # diagnostic_grid is required by the schema but ignored when doa_grid is
+    # set — kept here so the same yaml can be edited to swap variants.
+    diagnostic_grid:
+      extent_xy_m: 0.5
+      increment_m: 0.05
+      z_min_m: -1.6
+      z_max_m: 0.1
+    bands:
+      - { name: low,  f_min_hz: 200.0,  f_max_hz: 500.0 }
+      - { name: mid,  f_min_hz: 500.0,  f_max_hz: 2000.0 }
+      - { name: high, f_min_hz: 2000.0, f_max_hz: 6000.0 }
+    target_point_m: [0.0, 0.0, -1.5]
+    mask_mode: rotor_cone
+    # DOA hemisphere search space:
+    #   focal_radius=1.5 m matches the expected source distance, so the
+    #   steering atoms on the sphere align well with the actual external
+    #   source position (rotors at z=0 are off-sphere, but that's fine —
+    #   we only filter by direction, not by exact distance).
+    #   Rotor cone of 30° is wide enough that all four rotor DOAs (at the
+    #   equator at azimuths 0°, 90°, 180°, 270°) get cones; total rotor-cone
+    #   solid angle is therefore ~4 × 2π·(1−cos30°) sr.
+    #   Target cone of 30° around (0,0,-1) covers the south-pole region.
+    doa_grid:
+      focal_radius_m: 1.5
+      azimuth_step_deg: 5.0
+      elevation_step_deg: 5.0
+      hemisphere: lower
+      rotor_cone_half_angle_deg: 30.0
+      target_cone_half_angle_deg: 30.0
+      drone_cone_half_angle_deg: 45.0
+    rotor_z_tolerance_m: 0.25
+    clean_sc:
+      damp: 0.6
+      n_iter: 100
+      r_diag: true
+
+metrics:
+  welch_nperseg: 8192
+  welch_noverlap: 4096
+  bandwidth_factor: 1.0
+  broadband_low_hz: null
+
+plots:
+  enabled: true
+  fmax_hz: null
+  spectrogram_window: 4096
+  spectrogram_overlap: 2048
+  channel_subset: null
+
+output:
+  dir: results/pipeline/ext_only_doa_rotor_cone_{run_id}
+  filtered_h5: filtered.h5
+  metrics_json: metrics.json
+  plots_subdir: plots
+  copy_config: true

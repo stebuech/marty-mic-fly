@@ -144,6 +144,29 @@ class CleanScConfig(BaseModel):
     r_diag: bool = True
 
 
+class DoaGridConfig(BaseModel):
+    """Hemispheric DOA grid on a focal sphere (Track A).
+
+    The proposal calls for "räumliche Filterung nach der Einfallsrichtung
+    (DOA)" — this grid samples the focal sphere in (azimuth, elevation)
+    instead of a Cartesian volume, so CLEAN-SC discriminates only by
+    direction (the dimension the array can resolve at low frequencies)
+    rather than range (which it cannot at λ ≳ aperture).
+
+    When this config is present on ArrayFilterStageConfig, the stage
+    factory dispatches to DoaArrayFilterStage; mask_mode must then be
+    one of the cone variants (rotor_cone, target_cone, drone_cone).
+    """
+    model_config = ConfigDict(extra="forbid")
+    focal_radius_m: float = Field(default=1.5, gt=0.0)
+    azimuth_step_deg: float = Field(default=10.0, gt=0.0)
+    elevation_step_deg: float = Field(default=10.0, gt=0.0)
+    hemisphere: Literal["lower", "upper", "full"] = "lower"
+    rotor_cone_half_angle_deg: float = Field(default=30.0, gt=0.0, le=180.0)
+    target_cone_half_angle_deg: float = Field(default=30.0, gt=0.0, le=180.0)
+    drone_cone_half_angle_deg: float = Field(default=45.0, gt=0.0, le=180.0)
+
+
 class ArrayFilterStageConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     kind: Literal["array_filter"]
@@ -167,11 +190,17 @@ class ArrayFilterStageConfig(BaseModel):
     #     (drone_box_center_m ± drone_box_half_extent_m). Wider than rotor_disc
     #     and catches the centerline / smearing artefacts that CLEAN-SC produces
     #     in the drone vicinity.
-    mask_mode: Literal["target_box", "rotor_disc", "drone_box"] = "target_box"
+    mask_mode: Literal[
+        "target_box", "rotor_disc", "drone_box",
+        "rotor_cone", "target_cone", "drone_cone",
+    ] = "target_box"
     target_box_half_extent_m: tuple[float, float, float] = (0.15, 0.15, 0.15)
     drone_box_center_m: tuple[float, float, float] = (0.0, 0.0, 0.0)
     drone_box_half_extent_m: tuple[float, float, float] = (0.6, 0.6, 0.2)
     clean_sc: CleanScConfig = Field(default_factory=CleanScConfig)
+    # Track A — DOA hemisphere grid. When set, the stage factory dispatches
+    # to DoaArrayFilterStage and mask_mode must be one of the cone variants.
+    doa_grid: DoaGridConfig | None = None
 
 
 StageConfig = Annotated[

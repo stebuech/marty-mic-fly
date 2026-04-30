@@ -1,6 +1,8 @@
 """Diagnostic-grid builders and rotor-disc spatial masks for Stage 2."""
 from __future__ import annotations
 
+from typing import Literal
+
 import numpy as np
 
 
@@ -74,3 +76,104 @@ def build_target_box_mask(
     half = np.asarray(half_extent_m, dtype=np.float64)
     delta = np.abs(grid_positions - target[None, :])   # (G, 3)
     return np.all(delta <= half[None, :], axis=1)
+
+
+# ---------------------------------------------------------------- DOA grid (A)
+
+def build_doa_grid(
+    focal_radius_m: float,
+    azimuth_step_deg: float,
+    elevation_step_deg: float,
+    hemisphere: Literal["lower", "upper", "full"] = "lower",
+) -> tuple[np.ndarray, tuple[int, int]]:
+    """Sample a focal-radius sphere in (azimuth, elevation).
+
+    Returns (G, 3) Cartesian points on the sphere of radius ``focal_radius_m``,
+    plus the (n_az, n_el) shape for reshape. Convention:
+        x = r · cos(el) · cos(az)
+        y = r · cos(el) · sin(az)
+        z = r · sin(el)
+    Azimuth in [0, 360) (endpoint=False so 0° and 360° aren't duplicated).
+    Elevation in degrees, range determined by ``hemisphere``:
+        - 'lower': [-90, 0]   — appropriate for the AP2-A setup where rotors
+                                sit at z≈0 and the external source at z<0.
+        - 'upper': [0, +90]
+        - 'full' : [-90, +90]
+    Order: meshgrid(indexing="ij"), ravel index = i_az * n_el + i_el.
+    """
+    if focal_radius_m <= 0:
+        raise ValueError("focal_radius_m must be > 0")
+    if azimuth_step_deg <= 0 or elevation_step_deg <= 0:
+        raise ValueError("step_deg values must be > 0")
+
+    if hemisphere == "lower":
+        el_min, el_max = -90.0, 0.0
+    elif hemisphere == "upper":
+        el_min, el_max = 0.0, 90.0
+    elif hemisphere == "full":
+        el_min, el_max = -90.0, 90.0
+    else:
+        raise ValueError(f"unknown hemisphere {hemisphere!r}")
+
+    n_az = max(1, int(round(360.0 / azimuth_step_deg)))
+    n_el = max(1, int(round((el_max - el_min) / elevation_step_deg)) + 1)
+    az = np.linspace(0.0, 360.0, n_az, endpoint=False)
+    el = np.linspace(el_min, el_max, n_el)
+
+    AZ, EL = np.meshgrid(az, el, indexing="ij")
+    az_rad = np.deg2rad(AZ.ravel())
+    el_rad = np.deg2rad(EL.ravel())
+    r = float(focal_radius_m)
+    x = r * np.cos(el_rad) * np.cos(az_rad)
+    y = r * np.cos(el_rad) * np.sin(az_rad)
+    z = r * np.sin(el_rad)
+    points = np.stack([x, y, z], axis=1)
+    return points, (n_az, n_el)
+
+
+def build_doa_cone_mask(
+    grid_positions: np.ndarray,
+    direction_xyz: tuple[float, float, float] | np.ndarray,
+    cone_half_angle_deg: float,
+) -> np.ndarray:
+    """Boolean mask: True for grid cells whose unit direction (from origin) is
+    within ``cone_half_angle_deg`` of ``direction_xyz`` (which is normalized
+    internally and treated as a direction, not a point).
+
+    Caller's responsibility: pass a non-zero vector. Grid points at the origin
+    (norm < 1e-12) are unconditionally excluded.
+    """
+    target = np.asarray(direction_xyz, dtype=np.float64).reshape(3)
+    norm = float(np.linalg.norm(target))
+    if norm < 1e-12:
+        raise ValueError("direction_xyz must be non-zero")
+    target_unit = target / norm
+
+    grid_norms = np.linalg.norm(grid_positions, axis=1)
+    valid = grid_norms > 1e-12
+    grid_units = np.zeros_like(grid_positions)
+    grid_units[valid] = grid_positions[valid] / grid_norms[valid, None]
+
+    cos_threshold = float(np.cos(np.deg2rad(cone_half_angle_deg)))
+    dots = grid_units @ target_unit
+    return valid & (dots >= cos_threshold)
+
+
+def build_rotor_doa_cones_mask(
+    grid_positions: np.ndarray,
+    rotor_positions: np.ndarray,            # (3, R) — same convention as platform/rotor_positions
+    cone_half_angle_deg: float,
+) -> np.ndarray:
+    """Union of cones around each rotor's direction-from-origin. Rotors at
+    origin (|pos| < 1e-9) are skipped silently."""
+    if rotor_positions.shape[0] != 3:
+        raise ValueError(
+            f"rotor_positions must be (3, R); got {rotor_positions.shape}"
+        )
+    mask = np.zeros(grid_positions.shape[0], dtype=bool)
+    for i in range(rotor_positions.shape[1]):
+        rotor_xyz = rotor_positions[:, i]
+        if float(np.linalg.norm(rotor_xyz)) < 1e-9:
+            continue
+        mask |= build_doa_cone_mask(grid_positions, rotor_xyz, cone_half_angle_deg)
+    return mask
