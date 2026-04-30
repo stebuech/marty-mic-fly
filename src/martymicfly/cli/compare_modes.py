@@ -150,13 +150,17 @@ def compare_mask_modes(
             source_map_powers=sm.powers, drone_mask=sub,
             bands=stage_cfg.bands, ground_truth=gt_block,
         )
-        per_mode[mode] = m
+        per_mode[mode] = {**m, "psd_post": psd_post}
 
     localization = localization_stats_from_source_map(
         source_map=sm, grid_positions=diag_grid, grid_shape=diag_shape,
         bands=stage_cfg.bands, target_xyz_m=tuple(stage_cfg.target_point_m),
     )
-    return {"localization": localization, "per_mode": per_mode}
+    return {
+        "localization": localization, "per_mode": per_mode,
+        "frequencies": freqs, "psd_pre": psd_pre,
+        "gt_psd": (gt_block["psd_at_target"] if gt_block else None),
+    }
 
 
 def compare_doa_modes(
@@ -231,18 +235,23 @@ def compare_doa_modes(
         drone_csm = reconstruct_csm(sm.subset(sub), mic_positions)
         residual_csm = csm - drone_csm
         psd_post = steer_to_psd(residual_csm, freqs, mic_positions, stage_cfg.target_point_m)
-        per_mode[mode] = compute_array_metrics(
+        m = compute_array_metrics(
             csm_pre=csm, residual_csm=residual_csm,
             frequencies=freqs, psd_pre=psd_pre, psd_post=psd_post,
             source_map_powers=sm.powers, drone_mask=sub,
             bands=stage_cfg.bands, ground_truth=gt_block,
         )
+        per_mode[mode] = {**m, "psd_post": psd_post}
 
     localization = localization_stats_from_source_map(
         source_map=sm, grid_positions=diag_grid, grid_shape=(n_az, n_el),
         bands=stage_cfg.bands, target_xyz_m=tuple(stage_cfg.target_point_m),
     )
-    return {"localization": localization, "per_mode": per_mode}
+    return {
+        "localization": localization, "per_mode": per_mode,
+        "frequencies": freqs, "psd_pre": psd_pre,
+        "gt_psd": (gt_block["psd_at_target"] if gt_block else None),
+    }
 
 
 def compare_nnls(
@@ -287,6 +296,7 @@ def compare_nnls(
         drone_mask=af["drone_mask"],
         bands=stage_cfg.bands, ground_truth=gt_block,
     )
+    metrics["psd_post"] = af["target_psd_post"]
 
     # NNLS "localization" diagnostic: per-band power per atom kind. Extract
     # it from the source-map directly so the printed report has something
@@ -323,6 +333,9 @@ def compare_nnls(
             "target_xyz_m": tuple(float(v) for v in stage_cfg.target_point_m),
         },
         "per_mode": {"nnls": metrics},
+        "frequencies": af["frequencies"],
+        "psd_pre": af["target_psd_pre"],
+        "gt_psd": (gt_block["psd_at_target"] if gt_block else None),
     }
 
 
