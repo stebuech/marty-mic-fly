@@ -437,6 +437,313 @@ def plot_doa_polar_skymap(
     fig.write_html(out_path, include_plotlyjs="cdn")
 
 
+def _box_mesh(
+    center: tuple[float, float, float],
+    half: tuple[float, float, float],
+    color: str, opacity: float,
+    name: str,
+) -> go.Mesh3d:
+    """Axis-aligned box as a Mesh3d trace (12 triangles). Useful for showing
+    target_box / drone_box geometry."""
+    cx, cy, cz = center
+    hx, hy, hz = half
+    xs = np.array([cx - hx, cx + hx, cx + hx, cx - hx,
+                   cx - hx, cx + hx, cx + hx, cx - hx])
+    ys = np.array([cy - hy, cy - hy, cy + hy, cy + hy,
+                   cy - hy, cy - hy, cy + hy, cy + hy])
+    zs = np.array([cz - hz, cz - hz, cz - hz, cz - hz,
+                   cz + hz, cz + hz, cz + hz, cz + hz])
+    # 12 triangles for the 6 faces
+    tris = np.array([
+        [0, 1, 2], [0, 2, 3],     # bottom
+        [4, 5, 6], [4, 6, 7],     # top
+        [0, 1, 5], [0, 5, 4],     # front
+        [2, 3, 7], [2, 7, 6],     # back
+        [1, 2, 6], [1, 6, 5],     # right
+        [0, 3, 7], [0, 7, 4],     # left
+    ])
+    return go.Mesh3d(
+        x=xs, y=ys, z=zs,
+        i=tris[:, 0], j=tris[:, 1], k=tris[:, 2],
+        color=color, opacity=opacity, name=name,
+        showlegend=True, legendgroup=name,
+        hovertemplate=f"{name}<extra></extra>",
+    )
+
+
+def _cylinder_disc_mesh(
+    center: tuple[float, float, float],
+    radius: float,
+    half_height: float,
+    color: str, opacity: float,
+    name: str,
+    n_theta: int = 32,
+) -> go.Mesh3d:
+    """Z-axis-aligned cylinder centered at ``center``, used to show a rotor
+    disc with a vertical tolerance band. Triangulated side + caps."""
+    cx, cy, cz = center
+    theta = np.linspace(0.0, 2.0 * np.pi, n_theta, endpoint=False)
+    rim_x = cx + radius * np.cos(theta)
+    rim_y = cy + radius * np.sin(theta)
+    bottom = np.column_stack([rim_x, rim_y, np.full(n_theta, cz - half_height)])
+    top = np.column_stack([rim_x, rim_y, np.full(n_theta, cz + half_height)])
+    bottom_center = np.array([[cx, cy, cz - half_height]])
+    top_center = np.array([[cx, cy, cz + half_height]])
+    verts = np.vstack([bottom, top, bottom_center, top_center])  # (2*N + 2, 3)
+    BC = 2 * n_theta
+    TC = 2 * n_theta + 1
+    tris: list[list[int]] = []
+    for i in range(n_theta):
+        j = (i + 1) % n_theta
+        # side
+        tris.append([i, j, n_theta + i])
+        tris.append([j, n_theta + j, n_theta + i])
+        # bottom cap
+        tris.append([BC, j, i])
+        # top cap
+        tris.append([TC, n_theta + i, n_theta + j])
+    tris_arr = np.asarray(tris, dtype=int)
+    return go.Mesh3d(
+        x=verts[:, 0], y=verts[:, 1], z=verts[:, 2],
+        i=tris_arr[:, 0], j=tris_arr[:, 1], k=tris_arr[:, 2],
+        color=color, opacity=opacity, name=name,
+        showlegend=True, legendgroup=name,
+        hovertemplate=f"{name}<extra></extra>",
+    )
+
+
+def _cone_surface(
+    direction_xyz: np.ndarray,
+    half_angle_deg: float,
+    height: float,
+    color: str, opacity: float,
+    name: str,
+    n_r: int = 12, n_theta: int = 36,
+) -> go.Surface:
+    """Cone from origin along ``direction_xyz`` with given half-angle, drawn
+    as a parametric surface up to ``height``. The cone's axis vector is
+    normalized internally; an orthonormal frame is built from it."""
+    d = np.asarray(direction_xyz, dtype=np.float64).reshape(3)
+    norm = float(np.linalg.norm(d))
+    if norm < 1e-12:
+        raise ValueError("direction_xyz must be non-zero")
+    d = d / norm
+    # Build orthonormal frame (d, u, v)
+    helper = np.array([1.0, 0.0, 0.0]) if abs(d[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
+    u = np.cross(d, helper)
+    u = u / np.linalg.norm(u)
+    v = np.cross(d, u)
+    alpha = np.deg2rad(half_angle_deg)
+    cos_a = np.cos(alpha)
+    sin_a = np.sin(alpha)
+    # Parametrization: r ∈ [0, height/cos_a], theta ∈ [0, 2π]
+    # Point on the cone at axial distance s = r*cos_a, ring radius r*sin_a:
+    rs = np.linspace(0.0, height / max(cos_a, 1e-9), n_r)
+    ths = np.linspace(0.0, 2.0 * np.pi, n_theta)
+    R, TH = np.meshgrid(rs, ths, indexing="ij")
+    axis = R * cos_a   # (n_r, n_theta)
+    radial = R * sin_a # (n_r, n_theta)
+    cos_t = np.cos(TH); sin_t = np.sin(TH)
+    X = axis * d[0] + radial * (cos_t * u[0] + sin_t * v[0])
+    Y = axis * d[1] + radial * (cos_t * u[1] + sin_t * v[1])
+    Z = axis * d[2] + radial * (cos_t * u[2] + sin_t * v[2])
+    return go.Surface(
+        x=X, y=Y, z=Z,
+        surfacecolor=np.zeros_like(X),
+        colorscale=[[0, color], [1, color]],
+        showscale=False,
+        opacity=opacity, name=name,
+        showlegend=True, legendgroup=name,
+        hovertemplate=f"{name}<extra></extra>",
+    )
+
+
+def _hemisphere_surface(
+    radius: float, hemisphere: str, color: str, opacity: float,
+    name: str, n_az: int = 72, n_el: int = 19,
+) -> go.Surface:
+    """Wireframe-ish hemisphere as a faint reference for the DOA scene."""
+    if hemisphere == "lower":
+        el_min, el_max = -90.0, 0.0
+    elif hemisphere == "upper":
+        el_min, el_max = 0.0, 90.0
+    else:
+        el_min, el_max = -90.0, 90.0
+    az = np.linspace(0.0, 360.0, n_az)
+    el = np.linspace(el_min, el_max, n_el)
+    AZ, EL = np.meshgrid(az, el, indexing="ij")
+    az_r = np.deg2rad(AZ); el_r = np.deg2rad(EL)
+    X = radius * np.cos(el_r) * np.cos(az_r)
+    Y = radius * np.cos(el_r) * np.sin(az_r)
+    Z = radius * np.sin(el_r)
+    return go.Surface(
+        x=X, y=Y, z=Z,
+        surfacecolor=np.zeros_like(X),
+        colorscale=[[0, color], [1, color]],
+        showscale=False, opacity=opacity, name=name,
+        showlegend=True, legendgroup=name,
+        hovertemplate=f"{name}<extra></extra>",
+    )
+
+
+def build_mask_geometry_3d_fig(
+    *,
+    mic_positions: np.ndarray,                              # (M, 3)
+    rotor_positions: np.ndarray,                            # (3, R) platform convention
+    rotor_radii: np.ndarray,                                # (R,)
+    rotor_z_tolerance_m: float,
+    target_point_m: tuple[float, float, float],
+    target_box_half_extent_m: tuple[float, float, float],
+    drone_box_center_m: tuple[float, float, float],
+    drone_box_half_extent_m: tuple[float, float, float],
+    doa_focal_radius_m: float,
+    doa_hemisphere: str,
+    rotor_cone_half_angle_deg: float,
+    target_cone_half_angle_deg: float,
+    drone_cone_half_angle_deg: float,
+) -> go.Figure:
+    """3D visualization of Cartesian and DOA mask geometries.
+
+    Two side-by-side 3D scenes:
+      - Left: Cartesian masks. rotor_disc cylinders, drone_box, target_box.
+      - Right: DOA masks. Hemisphere reference + rotor / drone / target cones.
+
+    Both scenes share fixtures (mic positions, rotor positions, target
+    point) plotted as scatter markers.
+    """
+    fig = make_subplots(
+        rows=1, cols=2,
+        specs=[[{"type": "scene"}, {"type": "scene"}]],
+        subplot_titles=["Cartesian masks", "DOA cone masks"],
+        horizontal_spacing=0.05,
+    )
+
+    # Common fixtures: mic positions, rotor positions, target point.
+    R = rotor_positions.shape[1]
+    rotor_xs = rotor_positions[0]
+    rotor_ys = rotor_positions[1]
+    rotor_zs = rotor_positions[2]
+    target = np.asarray(target_point_m, dtype=np.float64)
+
+    def _add_fixtures(col: int, legendgroup_suffix: str = ""):
+        fig.add_trace(go.Scatter3d(
+            x=mic_positions[:, 0], y=mic_positions[:, 1], z=mic_positions[:, 2],
+            mode="markers", marker=dict(color="black", size=3),
+            name="mics", legendgroup="mics" + legendgroup_suffix,
+            showlegend=(col == 1),
+        ), row=1, col=col)
+        fig.add_trace(go.Scatter3d(
+            x=rotor_xs, y=rotor_ys, z=rotor_zs,
+            mode="markers", marker=dict(color="cyan", size=6, symbol="diamond"),
+            name="rotor centers", legendgroup="rotors" + legendgroup_suffix,
+            showlegend=(col == 1),
+        ), row=1, col=col)
+        fig.add_trace(go.Scatter3d(
+            x=[target[0]], y=[target[1]], z=[target[2]],
+            mode="markers", marker=dict(color="red", size=8, symbol="x"),
+            name="target", legendgroup="target" + legendgroup_suffix,
+            showlegend=(col == 1),
+        ), row=1, col=col)
+
+    # --- LEFT scene: Cartesian masks ---
+    _add_fixtures(col=1)
+    # rotor_disc cylinders
+    for i in range(R):
+        fig.add_trace(_cylinder_disc_mesh(
+            center=(float(rotor_xs[i]), float(rotor_ys[i]), float(rotor_zs[i])),
+            radius=float(rotor_radii[i]),
+            half_height=float(rotor_z_tolerance_m),
+            color="#ff7f0e", opacity=0.45,
+            name=f"rotor_disc[{i}]" if R > 1 else "rotor_disc",
+        ), row=1, col=1)
+    # drone_box (semi-transparent red box)
+    fig.add_trace(_box_mesh(
+        center=tuple(float(v) for v in drone_box_center_m),
+        half=tuple(float(v) for v in drone_box_half_extent_m),
+        color="#d62728", opacity=0.20,
+        name="drone_box",
+    ), row=1, col=1)
+    # target_box (semi-transparent green box)
+    fig.add_trace(_box_mesh(
+        center=tuple(float(v) for v in target_point_m),
+        half=tuple(float(v) for v in target_box_half_extent_m),
+        color="#2ca02c", opacity=0.30,
+        name="target_box",
+    ), row=1, col=1)
+
+    # --- RIGHT scene: DOA masks ---
+    _add_fixtures(col=2, legendgroup_suffix="_doa")
+    fig.add_trace(_hemisphere_surface(
+        radius=doa_focal_radius_m, hemisphere=doa_hemisphere,
+        color="#1f77b4", opacity=0.10,
+        name=f"focal sphere ({doa_hemisphere}, r={doa_focal_radius_m:.2f}m)",
+    ), row=1, col=2)
+    # Rotor cones
+    for i in range(R):
+        d = rotor_positions[:, i]
+        if float(np.linalg.norm(d)) < 1e-9:
+            continue
+        fig.add_trace(_cone_surface(
+            direction_xyz=d,
+            half_angle_deg=rotor_cone_half_angle_deg,
+            height=doa_focal_radius_m,
+            color="#ff7f0e", opacity=0.30,
+            name=f"rotor_cone[{i}]" if R > 1 else "rotor_cone",
+        ), row=1, col=2)
+    # Drone cone (wider, same direction set as rotor cones — typically used as union)
+    for i in range(R):
+        d = rotor_positions[:, i]
+        if float(np.linalg.norm(d)) < 1e-9:
+            continue
+        fig.add_trace(_cone_surface(
+            direction_xyz=d,
+            half_angle_deg=drone_cone_half_angle_deg,
+            height=doa_focal_radius_m,
+            color="#d62728", opacity=0.18,
+            name=f"drone_cone[{i}]" if R > 1 else "drone_cone",
+        ), row=1, col=2)
+    # Target cone (around target direction)
+    target_dir = target if float(np.linalg.norm(target)) > 1e-9 else np.array([0.0, 0.0, -1.0])
+    fig.add_trace(_cone_surface(
+        direction_xyz=target_dir,
+        half_angle_deg=target_cone_half_angle_deg,
+        height=doa_focal_radius_m,
+        color="#2ca02c", opacity=0.30,
+        name="target_cone",
+    ), row=1, col=2)
+
+    # Aspect + camera presets
+    extent = max(
+        float(doa_focal_radius_m) * 1.05,
+        float(np.max(np.abs(rotor_positions))) * 1.5,
+        max(abs(target[i]) for i in range(3)) * 1.05,
+    )
+    scene_kwargs = dict(
+        aspectmode="cube",
+        xaxis=dict(title="x [m]", range=[-extent, extent]),
+        yaxis=dict(title="y [m]", range=[-extent, extent]),
+        zaxis=dict(title="z [m]", range=[-extent, extent]),
+        camera=dict(eye=dict(x=1.4, y=1.4, z=1.0)),
+    )
+    fig.update_scenes(**scene_kwargs)
+    fig.update_layout(
+        title="Stage-2 mask geometry — Cartesian (left) vs DOA cones (right)",
+        height=800, width=1600,
+        legend=dict(orientation="v", x=1.02, y=1.0),
+    )
+    return fig
+
+
+def plot_mask_geometry_3d(out_path: str, **kwargs) -> None:
+    """Build the mask-geometry 3D figure and write it as standalone HTML.
+
+    All keyword arguments are forwarded to ``build_mask_geometry_3d_fig``.
+    """
+    fig = build_mask_geometry_3d_fig(**kwargs)
+    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+    fig.write_html(out_path, include_plotlyjs="cdn")
+
+
 def plot_target_psd(
     frequencies: np.ndarray,
     psd_pre: np.ndarray,

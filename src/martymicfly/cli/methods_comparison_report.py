@@ -41,7 +41,10 @@ from martymicfly.cli.compare_modes import (
     compare_mask_modes,
     compare_nnls,
 )
-from martymicfly.config import AppConfig
+from martymicfly.config import AppConfig, DoaGridConfig
+from martymicfly.eval.array_plots import build_mask_geometry_3d_fig
+from martymicfly.io.mic_geom import load_mic_geom_xml
+from martymicfly.io.synth_h5 import load_synth_h5
 
 log = logging.getLogger("martymicfly.methods_comparison_report")
 
@@ -233,6 +236,51 @@ def _ext_rec_floor_table(results: list[_MethodResult]) -> str:
     return "\n".join(rows)
 
 
+def _build_mask_geometry_html(results: list[_MethodResult]) -> str:
+    """Pick representative configs (cartesian & DOA) per scenario, build the
+    3D mask geometry figure and return its embedded HTML.
+
+    The geometry only depends on platform + stage_cfg, not on the actual
+    audio data — so we just need one representative config per scenario.
+    Same configs were already loaded in _run_one; here we just re-load
+    the platform metadata cheaply.
+    """
+    # Use the mixed cartesian + DOA combo as the canonical scene since it
+    # carries production-tuned mask sizes.
+    ref = next((r for r in results
+                if r.scenario == "mixed" and r.method == "cartesian"), None)
+    doa_ref = next((r for r in results
+                    if r.scenario == "mixed" and r.method == "doa"), None)
+    if ref is None or doa_ref is None:
+        return ("<p><i>(mask geometry skipped — missing cartesian or DOA "
+                "config in the mixed scenario)</i></p>")
+    cfg_cart = AppConfig.model_validate(yaml.safe_load(Path(ref.config_path).read_text()))
+    cfg_doa = AppConfig.model_validate(yaml.safe_load(Path(doa_ref.config_path).read_text()))
+    stage_cart = _first_array_filter(cfg_cart)
+    stage_doa = _first_array_filter(cfg_doa)
+    src = load_synth_h5(cfg_cart.input.audio_h5)
+    mic_pos = load_mic_geom_xml(cfg_cart.input.mic_geom_xml)
+    plat = src["platform"]
+    doa = stage_doa.doa_grid or DoaGridConfig()
+
+    geom_fig = build_mask_geometry_3d_fig(
+        mic_positions=mic_pos,
+        rotor_positions=np.asarray(plat["rotor_positions"]),
+        rotor_radii=np.asarray(plat["rotor_radii"]),
+        rotor_z_tolerance_m=float(stage_cart.rotor_z_tolerance_m),
+        target_point_m=tuple(float(v) for v in stage_cart.target_point_m),
+        target_box_half_extent_m=tuple(float(v) for v in stage_cart.target_box_half_extent_m),
+        drone_box_center_m=tuple(float(v) for v in stage_cart.drone_box_center_m),
+        drone_box_half_extent_m=tuple(float(v) for v in stage_cart.drone_box_half_extent_m),
+        doa_focal_radius_m=float(doa.focal_radius_m),
+        doa_hemisphere=doa.hemisphere,
+        rotor_cone_half_angle_deg=float(doa.rotor_cone_half_angle_deg),
+        target_cone_half_angle_deg=float(doa.target_cone_half_angle_deg),
+        drone_cone_half_angle_deg=float(doa.drone_cone_half_angle_deg),
+    )
+    return geom_fig.to_html(full_html=False, include_plotlyjs=False)
+
+
 def _build_report_html(
     out_path: Path,
     results: list[_MethodResult],
@@ -279,9 +327,22 @@ def _build_report_html(
     )
 
     # --- Section 7: target PSD overlay (mixed) ---
+    # Distinguish mode within method via line dash + width; method via color.
+    # Mode kind detected by name prefix so DOA/Cartesian both work.
+    def _mode_style(mode: str) -> tuple[str, float]:
+        m = mode.lower()
+        if m.startswith("rotor"):
+            return ("solid", 1.5)
+        if m.startswith("drone"):
+            return ("dash", 1.5)
+        if m.startswith("target"):
+            return ("dot", 1.5)
+        return ("solid", 1.8)   # nnls / unknown
+
     psd_fig = go.Figure()
     psd_fig.add_annotation(
         text=("Pseudo-target PSDs — mixed input, all methods/modes overlaid. "
+              "Color = method, dash = mode (rotor=solid, drone=dash, target=dot). "
               "Lower psd_post matches GT ⇔ better filter."),
         xref="paper", yref="paper", x=0.0, y=1.08, showarrow=False,
     )
@@ -305,18 +366,20 @@ def _build_report_html(
             psd_fig.add_trace(go.Scatter(
                 x=freqs, y=10 * np.log10(np.maximum(gt_psd, 1e-30)),
                 mode="lines", name="ground truth (external)",
-                line=dict(color="gray", dash="dot", width=2),
+                line=dict(color="gray", dash="dashdot", width=2),
             ))
             plotted_gt = True
         for mode, m in r.report["per_mode"].items():
             psd_post = m.get("psd_post")
             if psd_post is None:
                 continue
+            dash, width = _mode_style(mode)
             psd_fig.add_trace(go.Scatter(
                 x=freqs, y=10 * np.log10(np.maximum(psd_post, 1e-30)),
                 mode="lines", name=f"post — {r.method}/{mode}",
-                line=dict(color=color_map.get(r.method, None), width=1),
-                opacity=0.85,
+                line=dict(color=color_map.get(r.method, None),
+                          width=width, dash=dash),
+                opacity=0.9,
             ))
     psd_fig.update_xaxes(title_text="Frequency [Hz]")
     psd_fig.update_yaxes(title_text="PSD [dB rel. unit²/Hz]")
@@ -338,6 +401,7 @@ def _build_report_html(
 
     bars_html = fig.to_html(full_html=False, include_plotlyjs="cdn")
     psd_html = psd_fig.to_html(full_html=False, include_plotlyjs=False)
+    geom_html = _build_mask_geometry_html(results)
     loc_html = _localization_html_blocks(results)
     floor_html = _ext_rec_floor_table(results)
 
@@ -359,18 +423,25 @@ known-geometry NNLS) × two scenarios (external-only methodology reference,
 mixed drone + external).</p>
 {intro_html}
 
-<h2>2. Localization summary</h2>
+<h2>2. Mask geometry (3D)</h2>
+<p>Spatial layout of the Cartesian mask volumes (left scene) vs the DOA
+cones (right scene). Toggle individual masks via the legend; rotate by
+dragging. Cyan diamonds = rotor centers; black dots = mics; red ×
+= configured target point.</p>
+{geom_html}
+
+<h2>3. Localization summary</h2>
 <p>Where each method places the source-map energy. CLEAN-SC variants list
 peak xyz, z-span and the energy fractions near the true target z and the
 drone z. NNLS lists per-band power shares per atom kind.</p>
 {loc_html}
 
-<h2>3. Per-band metrics — bar plots</h2>
+<h2>4. Per-band metrics — bar plots</h2>
 <p>Left column: ext-only (any subtraction is a false positive). Right column:
 mixed (the production case).</p>
 {bars_html}
 
-<h2>4. External-source recovery floor + cross-term damage</h2>
+<h2>5. External-source recovery floor + cross-term damage</h2>
 <p>ext_rec on ext-only is the methodology floor (≈ −26 dB phase-only steering
 bias). ext_rec on mixed shows what the filter actually does. Δ = mixed − ext-only
 is the additional damage caused by the drone-source cross term: large
@@ -378,7 +449,7 @@ positive Δ means the filter leaves drone leakage in the residual; large
 negative Δ means it subtracts external-source energy by mistake.</p>
 {floor_html}
 
-<h2>5. Pseudo-target PSD overlay (mixed)</h2>
+<h2>6. Pseudo-target PSD overlay (mixed)</h2>
 <p>The closer post-filter PSD lies to the GT line, the better the filter.
 The CLEAN-SC steering bias (~−26 dB) shifts everything below GT — only the
 relative shape and offset between methods is informative.</p>
