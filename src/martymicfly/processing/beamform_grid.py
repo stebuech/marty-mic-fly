@@ -177,3 +177,31 @@ def build_rotor_doa_cones_mask(
             continue
         mask |= build_doa_cone_mask(grid_positions, rotor_xyz, cone_half_angle_deg)
     return mask
+
+
+def inter_rotor_midpoints_3xR(rotor_positions: np.ndarray, tol: float = 0.10) -> np.ndarray:
+    """Midpoints between nearest-neighbor rotor pairs, in (3, M) layout.
+
+    Pairwise distances; identify d_min; keep every unordered pair (i,j) with
+    |d_ij − d_min| ≤ tol·d_min; return their midpoints. For a quadcopter
+    (4 rotors at square corners) this returns the 4 side midpoints — i.e.
+    the points lying *between* adjacent rotors in the rotor plane.
+    """
+    if rotor_positions.shape[0] != 3:
+        raise ValueError(
+            f"rotor_positions must be (3, R); got {rotor_positions.shape}"
+        )
+    rp = rotor_positions.T  # (R, 3) for the pair math
+    n = rp.shape[0]
+    if n < 2:
+        return rotor_positions.copy()
+    diffs = rp[:, None, :] - rp[None, :, :]
+    dists = np.linalg.norm(diffs, axis=-1)
+    iu, ju = np.triu_indices(n, k=1)
+    pair_d = dists[iu, ju]
+    d_min = float(pair_d.min())
+    keep = np.abs(pair_d - d_min) <= tol * d_min
+    pairs_i = iu[keep]
+    pairs_j = ju[keep]
+    mids = 0.5 * (rp[pairs_i] + rp[pairs_j])  # (M, 3)
+    return mids.T  # (3, M)

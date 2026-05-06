@@ -63,7 +63,7 @@ stages:
       elevation_step_deg: 5.0
       hemisphere: lower
       rotor_cone_half_angle_deg: 30.0
-      target_cone_half_angle_deg: 30.0
+      target_cone_half_angle_deg: 45.0
       drone_cone_half_angle_deg: 45.0
     rotor_z_tolerance_m: 0.25
     clean_sc:

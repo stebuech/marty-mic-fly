@@ -8,14 +8,13 @@ A single ``--config`` is dispatched by content:
       single run, single subtraction (drone atoms vs target atom).
 
 Pass ``--config`` multiple times to combine methods in one report — useful
-to put Cartesian, DOA and NNLS side by side on the same input data.
+to put DOA and NNLS side by side on the same input data.
 
 Usage examples:
     python -m martymicfly.cli.compare_modes \
-        --config configs/pipeline_external_only_target_box.yaml
+        --config configs/pipeline_external_only_doa_target_cone.yaml
 
     python -m martymicfly.cli.compare_modes \
-        --config configs/pipeline_external_only_target_box.yaml \
         --config configs/pipeline_external_only_doa_target_cone.yaml \
         --config configs/pipeline_external_only_nnls.yaml \
         [--json combined.json]

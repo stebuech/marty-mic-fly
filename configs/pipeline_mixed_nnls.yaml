@@ -48,7 +48,10 @@ stages:
     target_point_m: [0.0, 0.0, -1.5]
     rotor_z_tolerance_m: 0.05
     atoms:
-      drone_atoms: rotor_positions
+      # Drohnenatome auf den 4 Zwischen-Rotor-Mittelpunkten (Sidemidpoints des
+      # Rotor-Quadrats). Erfasst die Push-Downwash-Strömungsregion zwischen
+      # den Rotoren, die auf der Schwerpunkthöhe der broadband-Emission liegt.
+      drone_atoms: inter_rotor_midpoints
       include_diffuse: false
       ridge: 0.0
       cond_threshold: 1.0e10

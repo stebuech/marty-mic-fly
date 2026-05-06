@@ -263,3 +263,65 @@ def test_factory_dispatches_to_known_atoms_stage():
     )
     stage = _array_filter_factory(cfg)
     assert isinstance(stage, KnownAtomsArrayFilterStage)
+
+
+def test_inter_rotor_midpoints_quadcopter():
+    """Square-corner rotors → 4 side midpoints, no diagonal pairs."""
+    from martymicfly.processing.array_filter_atoms import _inter_rotor_midpoints
+    rotors = np.array([
+        [+0.23, +0.23, 0.0],
+        [+0.23, -0.23, 0.0],
+        [-0.23, +0.23, 0.0],
+        [-0.23, -0.23, 0.0],
+    ])
+    mids = _inter_rotor_midpoints(rotors)
+    assert mids.shape == (4, 3)
+    expected = np.array([
+        [+0.23, 0.0, 0.0],
+        [-0.23, 0.0, 0.0],
+        [0.0, +0.23, 0.0],
+        [0.0, -0.23, 0.0],
+    ])
+    got = np.sort(mids.view([("", mids.dtype)] * 3), axis=0)
+    exp = np.sort(expected.view([("", expected.dtype)] * 3), axis=0)
+    assert np.allclose(got.view(np.float64), exp.view(np.float64))
+
+
+def test_drone_atoms_inter_rotor_midpoints_in_stage():
+    """Stage with drone_atoms='inter_rotor_midpoints' uses 4 atoms (quad)."""
+    from martymicfly.config import (
+        ArrayFilterStageConfig, AtomSetConfig, BandConfig,
+        CsmConfig, DiagnosticGridConfig,
+    )
+    from martymicfly.processing.array_filter import _array_filter_factory
+    from martymicfly.processing.array_filter_atoms import KnownAtomsArrayFilterStage
+
+    cfg = ArrayFilterStageConfig(
+        kind="array_filter",
+        algorithm="known_geometry_lsq",
+        csm=CsmConfig(),
+        diagnostic_grid=DiagnosticGridConfig(z_min_m=0.0, z_max_m=0.0),
+        bands=[BandConfig(name="mid", f_min_hz=500.0, f_max_hz=2000.0)],
+        atoms=AtomSetConfig(drone_atoms="inter_rotor_midpoints"),
+    )
+    stage = _array_filter_factory(cfg)
+    assert isinstance(stage, KnownAtomsArrayFilterStage)
+
+    class _Ctx:
+        metadata = {"platform": {"rotor_positions": np.array([
+            [+0.23, +0.23, -0.23, -0.23],
+            [+0.23, -0.23, +0.23, -0.23],
+            [0.0, 0.0, 0.0, 0.0],
+        ])}}
+        mic_positions = np.zeros((4, 3))
+
+    fit = stage._build_fit_input(_Ctx())
+    kinds = fit.aux["atom_kinds"]
+    drone_positions = fit.aux["real_positions"][kinds == "drone"]
+    assert drone_positions.shape == (4, 3)
+    # Each midpoint is on a cardinal axis (x or y) at ±0.23, z=0.
+    for p in drone_positions:
+        assert np.isclose(p[2], 0.0)
+        on_axis = (np.isclose(p[0], 0.0) and np.isclose(abs(p[1]), 0.23)) or \
+                  (np.isclose(p[1], 0.0) and np.isclose(abs(p[0]), 0.23))
+        assert on_axis, p

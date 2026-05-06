@@ -34,7 +34,7 @@ log = logging.getLogger("martymicfly.run_pipeline")
 # Default config path — repo-root/configs/example_notch.yaml. Resolved from this
 # file's location so calling main() from a Python console (without argv) works.
 _REPO_ROOT = Path(__file__).resolve().parents[3]
-DEFAULT_CONFIG = _REPO_ROOT / "configs" / "example_pipeline.yaml"
+DEFAULT_CONFIG = _REPO_ROOT / "configs" / "pipeline_mixed_doa_target_cone.yaml"
 
 
 def _select_segment(cfg, n_total: int, fs: float) -> tuple[float, int]:

@@ -1,23 +1,16 @@
-"""CLI: 3D visualization of Stage-2 mask geometries (Cartesian + DOA).
+"""CLI: 3D visualization of Stage-2 DOA cone mask geometry.
 
 Reads platform info (rotor positions, mic positions) from the synth file
-referenced in a pipeline YAML, plus all mask parameters from the same
-yaml's array_filter stage. Produces a single HTML with two side-by-side
-3D scenes:
-
-    - Left:  Cartesian masks (rotor_disc cylinders, drone_box, target_box)
-    - Right: DOA cone masks (rotor_cone, drone_cone, target_cone) on the
-             configured focal sphere.
-
-Both scenes share the same fixtures (mic + rotor + target markers).
+referenced in a pipeline YAML, plus DOA mask parameters from the same
+yaml's array_filter stage. Produces a single HTML scene with the
+hemisphere reference and rotor / drone / target cones.
 
 Usage:
     python -m martymicfly.cli.plot_mask_geometry \\
-        --config configs/example_pipeline.yaml \\
+        --config configs/pipeline_mixed_doa_target_cone.yaml \\
         [--out results/mask_geometry.html]
 
-If the YAML doesn't have ``doa_grid`` set, default DOA values are used so
-the right scene still renders something meaningful.
+If the YAML doesn't have ``doa_grid`` set, default DOA values are used.
 """
 from __future__ import annotations
 
@@ -57,11 +50,7 @@ def main(argv: list[str] | None = None) -> int:
         mic_positions=geom,
         rotor_positions=np.asarray(plat["rotor_positions"]),
         rotor_radii=np.asarray(plat["rotor_radii"]),
-        rotor_z_tolerance_m=float(stage_cfg.rotor_z_tolerance_m),
         target_point_m=tuple(float(v) for v in stage_cfg.target_point_m),
-        target_box_half_extent_m=tuple(float(v) for v in stage_cfg.target_box_half_extent_m),
-        drone_box_center_m=tuple(float(v) for v in stage_cfg.drone_box_center_m),
-        drone_box_half_extent_m=tuple(float(v) for v in stage_cfg.drone_box_half_extent_m),
         doa_focal_radius_m=float(doa.focal_radius_m),
         doa_hemisphere=doa.hemisphere,
         rotor_cone_half_angle_deg=float(doa.rotor_cone_half_angle_deg),

@@ -3,7 +3,7 @@ and print/persist a CLEAN-SC localization report per band.
 
 Usage:
     python -m martymicfly.cli.probe_localization \
-        --config configs/pipeline_external_only_target_box.yaml \
+        --config configs/pipeline_external_only_doa_target_cone.yaml \
         [--json out.json]
 """
 from __future__ import annotations

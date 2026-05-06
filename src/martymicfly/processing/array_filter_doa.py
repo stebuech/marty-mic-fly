@@ -4,10 +4,6 @@ Replaces the Cartesian volumetric search grid with a focal-radius hemisphere
 sampled in (azimuth, elevation). The CLEAN-SC algorithm is unchanged; only
 phases 2 (search space) and 4 (mask construction) are overridden.
 
-Aligned with the proposal text on AP 2:
-    "Durch Anwendung eines Arrayverfahrens werden diese nun durch räumliche
-    Filterung nach der Einfallsrichtung (direction of arrival, DOA) getrennt."
-
 Activated by setting ``cfg.doa_grid`` on ArrayFilterStageConfig; the factory
 in array_filter.py dispatches to this subclass.
 """
@@ -22,6 +18,7 @@ from martymicfly.processing.array_filter import (
 )
 from martymicfly.processing.beamform_grid import (
     build_doa_cone_mask,
+    inter_rotor_midpoints_3xR,
     build_doa_grid,
     build_rotor_doa_cones_mask,
 )
@@ -31,8 +28,7 @@ _CONE_MASK_MODES = ("rotor_cone", "target_cone", "drone_cone")
 
 
 class DoaArrayFilterStage(ArrayFilterStage):
-    """ArrayFilterStage variant that samples a DOA hemisphere instead of a
-    Cartesian volume. Inherits CSM build, fit and reconstruction unchanged
+    """ArrayFilterStage variant that samples a DOA hemisphere. Inherits CSM build, fit and reconstruction unchanged
     from the parent.
     """
 
@@ -68,9 +64,14 @@ class DoaArrayFilterStage(ArrayFilterStage):
         gcfg = self.cfg.doa_grid
         plat = ctx.metadata["platform"]
         rotor_positions = np.asarray(plat["rotor_positions"])
+        # rotor_cone and drone_cone both center on inter-rotor midpoints — the
+        # broadband downwash radiation has its spatial centroid between the
+        # rotors, not on them. Same axis directions for both, just different
+        # half-angles.
+        cone_axes = inter_rotor_midpoints_3xR(rotor_positions)
 
         rotor_cone_mask = build_rotor_doa_cones_mask(
-            fit_input.positions, rotor_positions, gcfg.rotor_cone_half_angle_deg,
+            fit_input.positions, cone_axes, gcfg.rotor_cone_half_angle_deg,
         )
 
         # The target "direction" is the unit vector to target_point_m. If
@@ -83,10 +84,10 @@ class DoaArrayFilterStage(ArrayFilterStage):
             fit_input.positions, target_dir, gcfg.target_cone_half_angle_deg,
         )
 
-        # drone_cone is a wider union of rotor cones — analogous to drone_box
-        # being a wider catch than rotor_disc in the Cartesian variant.
+        # drone_cone is a wider union of inter-rotor cones — analogous to
+        # drone_box being a wider catch than rotor_disc in the Cartesian variant.
         drone_cone_mask = build_rotor_doa_cones_mask(
-            fit_input.positions, rotor_positions, gcfg.drone_cone_half_angle_deg,
+            fit_input.positions, cone_axes, gcfg.drone_cone_half_angle_deg,
         )
 
         if self.cfg.mask_mode == "rotor_cone":

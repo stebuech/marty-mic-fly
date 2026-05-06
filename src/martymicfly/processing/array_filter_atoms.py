@@ -33,6 +33,30 @@ def _platform_rotor_positions(plat) -> np.ndarray:
     return rp
 
 
+def _inter_rotor_midpoints(rotor_positions: np.ndarray, tol: float = 0.10) -> np.ndarray:
+    """Midpoints between nearest-neighbor rotor pairs.
+
+    For a quadcopter (4 rotors at the corners of a square), this returns the
+    4 side midpoints — i.e. the points that lie *between* adjacent rotors,
+    in the gaps where the broadband downwash radiation is concentrated.
+
+    Algorithm: pairwise distances, identify the minimum (d_min), keep every
+    unordered pair (i, j) with |d_ij − d_min| ≤ tol·d_min, return midpoints.
+    """
+    rp = np.asarray(rotor_positions, dtype=np.float64)
+    n = rp.shape[0]
+    if n < 2:
+        return rp.copy()
+    diffs = rp[:, None, :] - rp[None, :, :]
+    dists = np.linalg.norm(diffs, axis=-1)
+    iu, ju = np.triu_indices(n, k=1)
+    pair_d = dists[iu, ju]
+    d_min = float(pair_d.min())
+    keep = np.abs(pair_d - d_min) <= tol * d_min
+    pairs = np.stack([iu[keep], ju[keep]], axis=1)
+    return 0.5 * (rp[pairs[:, 0]] + rp[pairs[:, 1]])
+
+
 class KnownAtomsArrayFilterStage(ArrayFilterStage):
     """Atom-Set-Stage. Erbt Phase 1 (CSM) und den Driver-Loop von ArrayFilterStage."""
 
@@ -48,10 +72,21 @@ class KnownAtomsArrayFilterStage(ArrayFilterStage):
             else self.cfg.target_point_m
         )
 
+        drone_mode = atoms_cfg.drone_atoms if atoms_cfg is not None else "rotor_positions"
+        if drone_mode == "inter_rotor_midpoints":
+            drone_positions = _inter_rotor_midpoints(rotor_positions)
+        elif drone_mode == "subsource_positions":
+            raise NotImplementedError(
+                "drone_atoms='subsource_positions' requires the source artifact "
+                "and is not wired through ctx yet"
+            )
+        else:  # rotor_positions
+            drone_positions = rotor_positions
+
         real_positions: list[np.ndarray] = []
         kinds: list[str] = []
-        for i in range(rotor_positions.shape[0]):
-            real_positions.append(rotor_positions[i])
+        for i in range(drone_positions.shape[0]):
+            real_positions.append(drone_positions[i])
             kinds.append("drone")
         real_positions.append(np.asarray(target_pos, dtype=np.float64))
         kinds.append("target")

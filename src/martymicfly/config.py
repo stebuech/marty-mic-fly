@@ -176,7 +176,11 @@ class AtomSetConfig(BaseModel):
     """
 
     model_config = ConfigDict(extra="forbid")
-    drone_atoms: Literal["rotor_positions", "subsource_positions"] = "rotor_positions"
+    drone_atoms: Literal[
+        "rotor_positions",
+        "inter_rotor_midpoints",
+        "subsource_positions",
+    ] = "rotor_positions"
     target_atom_position_m: tuple[float, float, float] | None = None
     include_diffuse: bool = False
     ridge: float = 0.0

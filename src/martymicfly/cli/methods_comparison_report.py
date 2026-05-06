@@ -1,9 +1,9 @@
 """Comprehensive Stage-2 methods comparison report.
 
-Runs the three Stage-2 methods (Cartesian + CLEAN-SC, DOA hemisphere +
-CLEAN-SC, NNLS on known atoms) on both the external-only methodology
-reference and the mixed (drone + external) production data, then emits
-a single multi-panel HTML report:
+Runs the two Stage-2 methods (DOA hemisphere + CLEAN-SC, NNLS on known
+atoms) on both the external-only methodology reference and the mixed
+(drone + external) production data, then emits a single multi-panel
+HTML report:
 
     1. Setup summary
     2. Localization tables per method × scenario
@@ -51,12 +51,10 @@ log = logging.getLogger("martymicfly.methods_comparison_report")
 
 _SCENARIO_GROUPS: dict[str, dict[str, str]] = {
     "ext_only": {
-        "cartesian": "configs/pipeline_external_only_target_box.yaml",
         "doa": "configs/pipeline_external_only_doa_target_cone.yaml",
         "nnls": "configs/pipeline_external_only_nnls.yaml",
     },
     "mixed": {
-        "cartesian": "configs/example_pipeline.yaml",
         "doa": "configs/pipeline_mixed_doa_target_cone.yaml",
         "nnls": "configs/pipeline_mixed_nnls.yaml",
     },
@@ -65,7 +63,7 @@ _SCENARIO_GROUPS: dict[str, dict[str, str]] = {
 
 @dataclass
 class _MethodResult:
-    method: str             # cartesian | doa | nnls
+    method: str             # doa | nnls
     scenario: str           # ext_only | mixed
     config_path: str
     report: dict
@@ -237,29 +235,20 @@ def _ext_rec_floor_table(results: list[_MethodResult]) -> str:
 
 
 def _build_mask_geometry_html(results: list[_MethodResult]) -> str:
-    """Pick representative configs (cartesian & DOA) per scenario, build the
-    3D mask geometry figure and return its embedded HTML.
+    """Build the 3D DOA mask geometry figure and return its embedded HTML.
 
-    The geometry only depends on platform + stage_cfg, not on the actual
-    audio data — so we just need one representative config per scenario.
-    Same configs were already loaded in _run_one; here we just re-load
-    the platform metadata cheaply.
+    The geometry only depends on platform + DOA stage_cfg, not on the
+    audio data — one representative DOA config is sufficient.
     """
-    # Use the mixed cartesian + DOA combo as the canonical scene since it
-    # carries production-tuned mask sizes.
-    ref = next((r for r in results
-                if r.scenario == "mixed" and r.method == "cartesian"), None)
     doa_ref = next((r for r in results
                     if r.scenario == "mixed" and r.method == "doa"), None)
-    if ref is None or doa_ref is None:
-        return ("<p><i>(mask geometry skipped — missing cartesian or DOA "
-                "config in the mixed scenario)</i></p>")
-    cfg_cart = AppConfig.model_validate(yaml.safe_load(Path(ref.config_path).read_text()))
+    if doa_ref is None:
+        return ("<p><i>(mask geometry skipped — missing DOA config in the "
+                "mixed scenario)</i></p>")
     cfg_doa = AppConfig.model_validate(yaml.safe_load(Path(doa_ref.config_path).read_text()))
-    stage_cart = _first_array_filter(cfg_cart)
     stage_doa = _first_array_filter(cfg_doa)
-    src = load_synth_h5(cfg_cart.input.audio_h5)
-    mic_pos = load_mic_geom_xml(cfg_cart.input.mic_geom_xml)
+    src = load_synth_h5(cfg_doa.input.audio_h5)
+    mic_pos = load_mic_geom_xml(cfg_doa.input.mic_geom_xml)
     plat = src["platform"]
     doa = stage_doa.doa_grid or DoaGridConfig()
 
@@ -267,11 +256,7 @@ def _build_mask_geometry_html(results: list[_MethodResult]) -> str:
         mic_positions=mic_pos,
         rotor_positions=np.asarray(plat["rotor_positions"]),
         rotor_radii=np.asarray(plat["rotor_radii"]),
-        rotor_z_tolerance_m=float(stage_cart.rotor_z_tolerance_m),
-        target_point_m=tuple(float(v) for v in stage_cart.target_point_m),
-        target_box_half_extent_m=tuple(float(v) for v in stage_cart.target_box_half_extent_m),
-        drone_box_center_m=tuple(float(v) for v in stage_cart.drone_box_center_m),
-        drone_box_half_extent_m=tuple(float(v) for v in stage_cart.drone_box_half_extent_m),
+        target_point_m=tuple(float(v) for v in stage_doa.target_point_m),
         doa_focal_radius_m=float(doa.focal_radius_m),
         doa_hemisphere=doa.hemisphere,
         rotor_cone_half_angle_deg=float(doa.rotor_cone_half_angle_deg),
@@ -286,7 +271,7 @@ def _build_report_html(
     results: list[_MethodResult],
 ) -> None:
     band_order = ["low", "mid", "high"]
-    color_map = {"cartesian": "#d62728", "doa": "#1f77b4", "nnls": "#2ca02c"}
+    color_map = {"doa": "#1f77b4", "nnls": "#2ca02c"}
 
     # --- Section 3 + 4 + 5: Bar plots ---
     fig = make_subplots(
@@ -320,7 +305,7 @@ def _build_report_html(
                 fig.add_trace(t, row=row, col=col)
 
     fig.update_layout(
-        title="Stage-2 method comparison — Cartesian vs DOA vs NNLS",
+        title="Stage-2 method comparison — DOA vs NNLS",
         barmode="group",
         height=1200, width=1500,
         legend=dict(orientation="v", x=1.02, y=1.0),
@@ -328,7 +313,6 @@ def _build_report_html(
 
     # --- Section 7: target PSD overlay (mixed) ---
     # Distinguish mode within method via line dash + width; method via color.
-    # Mode kind detected by name prefix so DOA/Cartesian both work.
     def _mode_style(mode: str) -> tuple[str, float]:
         m = mode.lower()
         if m.startswith("rotor"):
@@ -339,52 +323,89 @@ def _build_report_html(
             return ("dot", 1.5)
         return ("solid", 1.8)   # nnls / unknown
 
+    def _psd_db(arr) -> np.ndarray:
+        """PSD → dB, but mask out saturated/clipped values so plotly leaves
+        a gap instead of drawing a −300 dB spike."""
+        a = np.asarray(arr, dtype=np.float64)
+        out = np.full_like(a, np.nan)
+        valid = a > 1e-29
+        out[valid] = 10.0 * np.log10(a[valid])
+        return out
+
+    # --- Section 6: filter quality — cross-term damage spectrum ---
+    # Per (method, mode):
+    #   R(f) = post_mixed_db(f) − post_extonly_db(f)
+    # The ~27 dB phase-only steering bias is identical in both scenarios and
+    # cancels out, so R(f) directly measures the filter-induced cross-term.
+    # Reference: L(f) = pre_mixed_db − pre_extonly_db, the drone leakage at
+    # the target point before any filtering — i.e. what the filter has to do.
+    by_method_scen: dict[str, dict[str, dict]] = {}
+    for r in results:
+        by_method_scen.setdefault(r.method, {})[r.scenario] = r.report
+
     psd_fig = go.Figure()
     psd_fig.add_annotation(
-        text=("Pseudo-target PSDs — mixed input, all methods/modes overlaid. "
-              "Color = method, dash = mode (rotor=solid, drone=dash, target=dot). "
-              "Lower psd_post matches GT ⇔ better filter."),
+        text=("Filterqualität am Target. R(f) = post_mixed − post_extonly [dB]. "
+              "Methodikboden (~27 dB) hebt sich auf. R≈0 ⇔ Filter perfekt; "
+              "R>0 ⇔ Drohnen-Restleakage; R<0 ⇔ Übersubtraktion."),
         xref="paper", yref="paper", x=0.0, y=1.08, showarrow=False,
     )
-    plotted_pre = False
-    plotted_gt = False
-    for r in results:
-        if r.scenario != "mixed":
+
+    ref_methods = list(by_method_scen.keys())
+    if ref_methods:
+        scen0 = by_method_scen[ref_methods[0]]
+        if "mixed" in scen0 and "ext_only" in scen0:
+            freqs_ref = scen0["mixed"].get("frequencies")
+            pre_mix = scen0["mixed"].get("psd_pre")
+            pre_ext = scen0["ext_only"].get("psd_pre")
+            if (freqs_ref is not None
+                    and pre_mix is not None and pre_ext is not None):
+                L_db = _psd_db(pre_mix) - _psd_db(pre_ext)
+                psd_fig.add_trace(go.Scatter(
+                    x=freqs_ref, y=L_db, mode="lines",
+                    name="drone leakage @ target (kein Filter)",
+                    line=dict(color="black", width=2.5, dash="dashdot"),
+                ))
+
+    for method, scen in by_method_scen.items():
+        if "mixed" not in scen or "ext_only" not in scen:
             continue
-        freqs = r.report.get("frequencies")
-        psd_pre = r.report.get("psd_pre")
-        gt_psd = r.report.get("gt_psd")
-        if freqs is None or psd_pre is None:
+        freqs = scen["mixed"].get("frequencies")
+        if freqs is None:
             continue
-        if not plotted_pre:
-            psd_fig.add_trace(go.Scatter(
-                x=freqs, y=10 * np.log10(np.maximum(psd_pre, 1e-30)),
-                mode="lines", name="pre (mixed)", line=dict(color="black", width=2),
-            ))
-            plotted_pre = True
-        if gt_psd is not None and not plotted_gt:
-            psd_fig.add_trace(go.Scatter(
-                x=freqs, y=10 * np.log10(np.maximum(gt_psd, 1e-30)),
-                mode="lines", name="ground truth (external)",
-                line=dict(color="gray", dash="dashdot", width=2),
-            ))
-            plotted_gt = True
-        for mode, m in r.report["per_mode"].items():
-            psd_post = m.get("psd_post")
-            if psd_post is None:
+        modes_mix = scen["mixed"].get("per_mode", {})
+        modes_ext = scen["ext_only"].get("per_mode", {})
+        for mode in modes_mix:
+            if mode not in modes_ext:
                 continue
+            post_mix = modes_mix[mode].get("psd_post")
+            post_ext = modes_ext[mode].get("psd_post")
+            if post_mix is None or post_ext is None:
+                continue
+            r_db = _psd_db(post_mix) - _psd_db(post_ext)
             dash, width = _mode_style(mode)
             psd_fig.add_trace(go.Scatter(
-                x=freqs, y=10 * np.log10(np.maximum(psd_post, 1e-30)),
-                mode="lines", name=f"post — {r.method}/{mode}",
-                line=dict(color=color_map.get(r.method, None),
+                x=freqs, y=r_db, mode="lines",
+                name=f"R — {method}/{mode}",
+                line=dict(color=color_map.get(method, None),
                           width=width, dash=dash),
                 opacity=0.9,
             ))
-    psd_fig.update_xaxes(title_text="Frequency [Hz]")
-    psd_fig.update_yaxes(title_text="PSD [dB rel. unit²/Hz]")
+
+    psd_fig.add_hline(y=0.0, line=dict(color="gray", width=1, dash="dot"))
+
+    f_max = 0.0
+    for r in results:
+        f = r.report.get("frequencies")
+        if f is not None and len(f):
+            f_max = max(f_max, float(np.max(f)))
+    psd_fig.update_xaxes(
+        title_text="Frequency [Hz]",
+        range=[50.0, f_max if f_max > 0 else 6000.0],
+    )
+    psd_fig.update_yaxes(title_text="Residual drone leakage @ target [dB]")
     psd_fig.update_layout(
-        title="Pseudo-target PSD — mixed input, all methods",
+        title="Filterqualität — Cross-Term-Damage-Spektrum (R = post_mixed − post_extonly)",
         height=600, width=1500,
         legend=dict(orientation="v", x=1.02, y=1.0),
     )
@@ -415,19 +436,18 @@ def _build_report_html(
   table {{ font-size: 0.9em; margin: 0.5em 0; }}
   th {{ background: #eee; }}
 </style></head><body>
-<h1>Stage-2 methods comparison — Cartesian vs DOA vs NNLS</h1>
+<h1>Stage-2 methods comparison — DOA vs NNLS</h1>
 
 <h2>1. Setup</h2>
-<p>Six runs: three methods (Cartesian + CLEAN-SC, DOA hemisphere + CLEAN-SC,
-known-geometry NNLS) × two scenarios (external-only methodology reference,
-mixed drone + external).</p>
+<p>Four runs: two methods (DOA hemisphere + CLEAN-SC, known-geometry NNLS)
+× two scenarios (external-only methodology reference, mixed drone +
+external).</p>
 {intro_html}
 
 <h2>2. Mask geometry (3D)</h2>
-<p>Spatial layout of the Cartesian mask volumes (left scene) vs the DOA
-cones (right scene). Toggle individual masks via the legend; rotate by
-dragging. Cyan diamonds = rotor centers; black dots = mics; red ×
-= configured target point.</p>
+<p>Spatial layout of the DOA cone masks on the focal sphere. Toggle
+individual masks via the legend; rotate by dragging. Cyan diamonds =
+rotor centers; black dots = mics; red × = configured target point.</p>
 {geom_html}
 
 <h2>3. Localization summary</h2>
@@ -449,10 +469,20 @@ positive Δ means the filter leaves drone leakage in the residual; large
 negative Δ means it subtracts external-source energy by mistake.</p>
 {floor_html}
 
-<h2>6. Pseudo-target PSD overlay (mixed)</h2>
-<p>The closer post-filter PSD lies to the GT line, the better the filter.
-The CLEAN-SC steering bias (~−26 dB) shifts everything below GT — only the
-relative shape and offset between methods is informative.</p>
+<h2>6. Filterqualität am Target — Cross-Term-Damage-Spektrum</h2>
+<p>Pro Methode/Modus: <code>R(f) = post_mixed_db(f) − post_extonly_db(f)</code>.
+Der ~27 dB Phase-only-Steering-Bias ist in beiden Szenarien gleich und hebt sich
+auf — R(f) zeigt damit direkt die <b>Qualität der räumlichen Filterung</b>:
+wie viel Drohnen-Leakage am target-Punkt nach dem Filter relativ zum
+ext-only-Referenzlauf übrig ist. Die schwarze Referenzkurve <code>L(f) = pre_mixed
+− pre_extonly</code> ist die Drohnen-Leakage am target-Punkt <i>vor</i> jedem
+Filter — also die Aufgabe, die der Filter zu lösen hat.</p>
+<ul>
+<li><code>R(f) ≈ 0 dB</code> → Filter eliminiert Cross-Term perfekt</li>
+<li><code>0 &lt; R(f) &lt; L(f)</code> → Filter unterdrückt Leakage teilweise</li>
+<li><code>R(f) &gt; L(f)</code> → Filter macht's schlimmer als nichts zu tun</li>
+<li><code>R(f) &lt; 0 dB</code> → Übersubtraktion (Target-Energie mit weggenommen)</li>
+</ul>
 {psd_html}
 
 <hr>
