@@ -308,3 +308,149 @@ def write_report(
         },
     }
     (output_dir / "metrics.json").write_text(json.dumps(metrics, indent=2))
+
+
+def write_plots(*, output_dir, rung1: dict, rung2: dict, rung3: dict,
+                s_q_pa2_per_hz: float, mic_positions, source_position) -> None:
+    """Three HTML plots: per-mic Welch PSD, CSM-diagonal PSD, steered PSD."""
+    import plotly.graph_objects as go
+    from pathlib import Path
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Rung 1: per-mic Welch
+    f1 = rung1["frequencies_hz"]
+    fig = go.Figure()
+    r = np.linalg.norm(
+        np.asarray(mic_positions) - np.asarray(source_position)[None, :], axis=1
+    )
+    for m in range(rung1["psd_per_mic"].shape[1]):
+        fig.add_trace(go.Scatter(
+            x=f1, y=10*np.log10(rung1["psd_per_mic"][:, m]),
+            mode="lines", name=f"mic {m} (r={r[m]:.2f})",
+            opacity=0.6, line={"width": 1},
+        ))
+        fig.add_trace(go.Scatter(
+            x=[f1[0], f1[-1]],
+            y=[10*np.log10(rung1["theoretical_per_mic"][m])]*2,
+            mode="lines", name=f"theory mic {m}",
+            line={"dash": "dash", "width": 1}, showlegend=False,
+        ))
+    fig.update_layout(
+        title="Rung 1 — Welch PSD per mic vs theoretical S_q/r²",
+        xaxis_title="frequency [Hz]", yaxis_title="PSD [dB re 1 Pa²/Hz]",
+    )
+    fig.write_html(output_dir / "mic_psd_vs_theory.html", include_plotlyjs="cdn")
+
+    # Rung 2: CSM diagonal
+    f2 = rung2["frequencies_hz"]
+    fig = go.Figure()
+    for m in range(rung2["csm_diag_per_mic"].shape[1]):
+        fig.add_trace(go.Scatter(
+            x=f2, y=10*np.log10(rung2["csm_diag_per_mic"][:, m]),
+            mode="lines", name=f"mic {m}", opacity=0.6, line={"width": 1},
+        ))
+    fig.update_layout(
+        title="Rung 2 — CSM diagonal per mic",
+        xaxis_title="frequency [Hz]", yaxis_title="PSD [dB re 1 Pa²/Hz]",
+    )
+    fig.write_html(output_dir / "csm_diag_vs_theory.html", include_plotlyjs="cdn")
+
+    # Rung 3: steered PSD
+    f3 = rung3["frequencies_hz"]
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=f3, y=10*np.log10(rung3["steered_psd"]),
+        mode="lines", name="steer_to_psd at source",
+    ))
+    fig.add_trace(go.Scatter(
+        x=[f3[0], f3[-1]],
+        y=[10*np.log10(rung3["theoretical_psd"])]*2,
+        mode="lines", name="theoretical S_q · <1/r>²",
+        line={"dash": "dash"},
+    ))
+    fig.update_layout(
+        title="Rung 3 — steered PSD at source vs geometric expectation",
+        xaxis_title="frequency [Hz]", yaxis_title="PSD [dB re 1 Pa²/Hz]",
+    )
+    fig.write_html(output_dir / "steered_psd.html", include_plotlyjs="cdn")
+
+
+def main() -> None:
+    """End-to-end: load mic_geom, propagate, run 3 rungs, write report+plots."""
+    import argparse
+    from datetime import datetime
+    from pathlib import Path
+
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument(
+        "--mic-geom", type=Path,
+        default=Path("/media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/mic_geom.xml"),
+    )
+    parser.add_argument("--duration-s", type=float, default=10.0)
+    parser.add_argument("--sample-rate", type=float, default=51_200.0)
+    parser.add_argument("--source-x", type=float, default=0.0)
+    parser.add_argument("--source-y", type=float, default=0.0)
+    parser.add_argument("--source-z", type=float, default=-1.5)
+    parser.add_argument("--s-q-pa2-per-hz", type=float, default=1e-4)
+    parser.add_argument("--seed", type=int, default=2026_05_07)
+    parser.add_argument(
+        "--output-root", type=Path, default=Path("results/scaling_ladder")
+    )
+    args = parser.parse_args()
+
+    from martymicfly.io.mic_geom import load_mic_geom_xml
+    mic_positions = load_mic_geom_xml(args.mic_geom)
+    source_pos = np.array([args.source_x, args.source_y, args.source_z])
+    n_samples = int(args.duration_s * args.sample_rate)
+    rng = np.random.default_rng(args.seed)
+
+    print(f"[scaling_ladder] {mic_positions.shape[0]} mics from {args.mic_geom}")
+    print(f"[scaling_ladder] propagating {args.duration_s:.1f}s @ {args.sample_rate:.0f} Hz")
+    time_data = propagate_white_noise(
+        n_samples=n_samples, sample_rate=args.sample_rate,
+        s_q_pa2_per_hz=args.s_q_pa2_per_hz,
+        source_position=source_pos, mic_positions=mic_positions, rng=rng,
+    )
+
+    common = dict(
+        time_data=time_data, sample_rate=args.sample_rate,
+        s_q_pa2_per_hz=args.s_q_pa2_per_hz,
+        source_position=source_pos, mic_positions=mic_positions,
+        f_min_hz=200.0, f_max_hz=6000.0,
+        nperseg=512, noverlap=256, window="hann",
+    )
+    print("[scaling_ladder] rung 1 …")
+    r1 = rung1_mic_psd(**common)
+    print(f"  Δ₁ = {r1['delta_db_mean']:+.3f} dB")
+    print("[scaling_ladder] rung 2 …")
+    r2 = rung2_csm_diag(**common, diag_loading_rel=0.0)
+    print(f"  Δ₂ = {r2['delta_db_mean']:+.3f} dB")
+    print("[scaling_ladder] rung 3 …")
+    r3 = rung3_steered_psd(**common, diag_loading_rel=0.0)
+    print(f"  Δ₃ = {r3['delta_db_band_mean']:+.3f} dB")
+
+    run_id = datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+    out = args.output_root / run_id
+    write_report(
+        output_dir=out, rung1=r1, rung2=r2, rung3=r3,
+        s_q_pa2_per_hz=args.s_q_pa2_per_hz,
+        source_position=source_pos, mic_positions=mic_positions,
+        sample_rate=args.sample_rate,
+        config_summary=(
+            f"duration={args.duration_s}s, fs={args.sample_rate:.0f}, "
+            f"nperseg=512, noverlap=256, window=hann, "
+            f"f_band=[200,6000] Hz, source={tuple(source_pos.tolist())}"
+        ),
+    )
+    write_plots(
+        output_dir=out, rung1=r1, rung2=r2, rung3=r3,
+        s_q_pa2_per_hz=args.s_q_pa2_per_hz,
+        mic_positions=mic_positions, source_position=source_pos,
+    )
+    print(f"[scaling_ladder] wrote report + plots → {out}")
+
+
+if __name__ == "__main__":
+    main()
