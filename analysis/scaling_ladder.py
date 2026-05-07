@@ -142,3 +142,58 @@ def rung2_csm_diag(
         "delta_db_per_mic": delta_db_per_mic,
         "delta_db_mean": float(delta_db_per_mic.mean()),
     }
+
+
+def rung3_steered_psd(
+    *,
+    time_data: np.ndarray,
+    sample_rate: float,
+    s_q_pa2_per_hz: float,
+    source_position: np.ndarray,
+    mic_positions: np.ndarray,
+    f_min_hz: float,
+    f_max_hz: float,
+    nperseg: int,
+    noverlap: int,
+    window: str,
+    diag_loading_rel: float,
+) -> dict:
+    """Rung 3 — production steer_to_psd at the source position vs S_q · <1/r_m>^2.
+
+    The expectation derives from phase-only delay-and-sum with 1/M^2 normalization
+    on a unit-amplitude steering vector: for a monopole at the target the
+    quadratic form yields S_q · |Σ_m exp(-2j·2π f r_m/c) / r_m|² / M².  When
+    the propagator-and-steerer sign convention is consistent the doubled-phase
+    cancels and we get S_q · (Σ 1/r_m / M)² = S_q · <1/r_m>².
+    """
+    from martymicfly.processing.csm import CsmConfig, build_measurement_csm
+    from martymicfly.processing.steering import steer_to_psd
+
+    cfg = CsmConfig(
+        nperseg=nperseg, noverlap=noverlap, window=window,
+        diag_loading_rel=diag_loading_rel,
+        f_min_hz=f_min_hz, f_max_hz=f_max_hz,
+    )
+    csm, freqs = build_measurement_csm(time_data, sample_rate, cfg)
+    psd = steer_to_psd(
+        csm=csm,
+        frequencies=freqs,
+        mic_positions=np.asarray(mic_positions, dtype=np.float64),
+        target_point=tuple(np.asarray(source_position, dtype=np.float64).tolist()),
+    )                                                            # (F,)
+
+    mics = np.asarray(mic_positions, dtype=np.float64)
+    src = np.asarray(source_position, dtype=np.float64)
+    r = np.linalg.norm(mics - src[None, :], axis=1)
+    geom_factor = float((1.0 / r).mean()) ** 2                   # <1/r>^2
+    theoretical = s_q_pa2_per_hz * geom_factor                   # scalar Pa²/Hz
+
+    delta_db = 10.0 * np.log10(psd / theoretical)
+    return {
+        "frequencies_hz": freqs,
+        "steered_psd": psd,
+        "theoretical_psd": theoretical,
+        "geometric_factor": geom_factor,
+        "delta_db_per_freq": delta_db,
+        "delta_db_band_mean": float(delta_db.mean()),
+    }

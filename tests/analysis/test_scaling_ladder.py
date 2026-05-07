@@ -125,3 +125,40 @@ def test_rung2_csm_diag_matches_theory_within_0p5_db(sl):
     assert "delta_db_per_mic" in result
     assert "csm" in result and "frequencies_hz" in result
     assert abs(result["delta_db_mean"]) < 0.5
+
+
+def test_rung3_steered_psd_matches_geometry_factor_within_2_db(sl):
+    """Rung 3 expectation: S_steered(target) = S_q · <1/r_m>^2 (phase-only DAS).
+
+    Tolerance 2 dB (not 0.5) because phase-only DAS has frequency-dependent
+    sidelobe-bleed at small arrays — only the broadband mean of the on-source
+    bin should match the geometric factor.
+    """
+    rng = np.random.default_rng(13)
+    fs = 51_200.0
+    n_samples = int(fs * 6.0)              # longer for tighter Welch estimate
+    s_q = 1e-4
+    source_pos = np.array([0.0, 0.0, -1.5])
+    mic_positions = np.array([
+        [0.1, 0.0, 0.0], [-0.1, 0.0, 0.0],
+        [0.0, 0.1, 0.0], [0.0, -0.1, 0.0],
+        [0.07, 0.07, 0.0], [-0.07, -0.07, 0.0],
+        [0.07, -0.07, 0.0], [-0.07, 0.07, 0.0],
+    ])
+    time_data = sl.propagate_white_noise(
+        n_samples=n_samples, sample_rate=fs, s_q_pa2_per_hz=s_q,
+        source_position=source_pos, mic_positions=mic_positions, rng=rng,
+    )
+    result = sl.rung3_steered_psd(
+        time_data=time_data, sample_rate=fs,
+        s_q_pa2_per_hz=s_q,
+        source_position=source_pos, mic_positions=mic_positions,
+        f_min_hz=200.0, f_max_hz=6000.0,
+        nperseg=512, noverlap=256, window="hann",
+        diag_loading_rel=0.0,
+    )
+    assert "delta_db_band_mean" in result
+    assert "theoretical_psd" in result
+    assert "steered_psd" in result
+    # Geometric factor < 1, so theoretical_psd < S_q. Both reported in dB.
+    assert abs(result["delta_db_band_mean"]) < 2.0
