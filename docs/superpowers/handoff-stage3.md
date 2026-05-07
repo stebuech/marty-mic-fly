@@ -123,3 +123,19 @@ Erst danach Stufe 3 (z.B. Korrelations-basierte Trennung, Multi-Position-Mics, o
 - Plan: `docs/superpowers/plans/2026-04-28-ap2a-stage2-array-deconv-plan.md`
 - Smoke-Run-Outputs: `results/pipeline/2026-04-29T00-18-35_c162fe59/`
 - Synth-Daten: `/media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/ap2a_synth_mixed_gaptip*.h5`
+
+---
+
+## Scaling-Ladder Diagnostic (2026-05-07)
+
+Run: `results/scaling_ladder/2026-05-07T13-36-43/`
+
+| Rung | Description | Δ (dB) | Verdict |
+|------|-------------|--------|---------|
+| 1 — Welch mic-PSD              | Direct Welch per mic vs S_q/r² | -0.055  | PASS |
+| 2 — CSM-diagonal               | Production CSM diag vs S_q/r²  | -0.055  | PASS |
+| 3 — steer_to_psd at source     | Steered PSD vs S_q·⟨1/r⟩²     | -0.210  | PASS |
+
+**Diagnosis:** All three rungs within tolerance. The −27 dB bias observed in pipeline ext_only runs must therefore enter *outside* the CSM-and-steering path — investigate band-integration (`integrate_band_maps`) or GT-comparison.
+
+**Implication for parameter study:** The ~−27 dB bias observed in ext_only pipeline runs is NOT in the steering chain (CSM build + steer_to_psd). The bug must be in band-integration (integrate_band_maps), the GT-comparison logic (compute_array_metrics/external_recovery_db), or the Acoular path used by CleanScAlgorithm. Next step: add a similar ladder test comparing integrate_band_maps output to steer_to_psd output on the same CSM.
