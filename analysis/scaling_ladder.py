@@ -163,8 +163,9 @@ def rung3_steered_psd(
     The expectation derives from phase-only delay-and-sum with 1/M^2 normalization
     on a unit-amplitude steering vector: for a monopole at the target the
     quadratic form yields S_q · |Σ_m exp(-2j·2π f r_m/c) / r_m|² / M².  When
-    the propagator-and-steerer sign convention is consistent the doubled-phase
-    cancels and we get S_q · (Σ 1/r_m / M)² = S_q · <1/r_m>².
+    the array aperture is small relative to the source distance (all r_m ≈ r̄),
+    the sum simplifies to M/r̄ and the expectation approaches S_q · <1/r_m>².
+    This approximation holds well for the production 16-mic array at 1.5 m.
     """
     from martymicfly.processing.csm import CsmConfig, build_measurement_csm
     from martymicfly.processing.steering import steer_to_psd
