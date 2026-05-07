@@ -394,6 +394,8 @@ def _emit_array_filter_outputs(
         source_map_powers=sm.powers, drone_mask=af["drone_mask"],
         bands=[b.model_dump() for b in stage_cfg.bands],
         ground_truth=gt_block,
+        mic_positions=ctx.mic_positions,
+        target_point=tuple(stage_cfg.target_point_m),
     )
 
     mj = out_dir / cfg.output.metrics_json

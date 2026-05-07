@@ -26,7 +26,17 @@ def compute_array_metrics(
     drone_mask: np.ndarray,               # (G,) bool
     bands: list,                          # list of dict or BandConfig
     ground_truth: Optional[dict] = None,  # {"psd_at_target": (F,), "frequencies": (F,)}
+    mic_positions: Optional[np.ndarray] = None,
+    target_point: Optional[tuple[float, float, float]] = None,
 ) -> dict:
+    # When geometry is supplied, lift psd_pre/psd_post into proper source-PSD
+    # units by inverting the phase-only-DAS + 1/(4π·r)-Greens convention.
+    if mic_positions is not None and target_point is not None:
+        from martymicfly.processing.steering import range_compensation_factor
+        cal = range_compensation_factor(mic_positions, target_point)
+        psd_pre = psd_pre * cal
+        psd_post = psd_post * cal
+
     metrics: dict = {"bands": {}, "global": {}}
 
     trace_pre = np.real(np.diagonal(csm_pre, axis1=1, axis2=2)).sum(axis=1)         # (F,)
