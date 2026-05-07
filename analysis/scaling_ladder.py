@@ -197,3 +197,114 @@ def rung3_steered_psd(
         "delta_db_per_freq": delta_db,
         "delta_db_band_mean": float(delta_db.mean()),
     }
+
+
+def write_report(
+    *,
+    output_dir,
+    rung1: dict,
+    rung2: dict,
+    rung3: dict,
+    s_q_pa2_per_hz: float,
+    source_position,
+    mic_positions,
+    sample_rate: float,
+    config_summary: str,
+) -> None:
+    """Write a Markdown summary plus a metrics.json to output_dir."""
+    import json
+    from pathlib import Path
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    d1 = rung1["delta_db_mean"]
+    d2 = rung2["delta_db_mean"]
+    d3 = rung3["delta_db_band_mean"]
+
+    pass_threshold_db = 0.5
+    pass_3_threshold_db = 2.0
+
+    def verdict(delta, thr):
+        return "PASS" if abs(delta) < thr else "FAIL"
+
+    diagnosis_lines = []
+    if abs(d1) < pass_threshold_db and abs(d2) < pass_threshold_db and abs(d3) >= pass_3_threshold_db:
+        diagnosis_lines.append(
+            f"Forward + CSM are clean. The ~{d3:+.2f} dB offset enters at the "
+            "steering stage. Likely cause: sign-convention mismatch between "
+            "propagator (1/r delay) and `steer_to_psd` (h = exp(+j 2πf r/c)), "
+            "or steering-norm convention (1/M² vs 1/M)."
+        )
+    elif abs(d1) < pass_threshold_db and abs(d2) >= pass_threshold_db:
+        diagnosis_lines.append(
+            f"Forward Welch is clean (Δ₁ = {d1:+.2f} dB) but the CSM stage adds "
+            f"Δ₂ − Δ₁ = {d2-d1:+.2f} dB. Suspect: window or density normalization "
+            "in `csm.py` (`scipy.signal.csd(..., scaling='density')` vs custom)."
+        )
+    elif abs(d1) >= pass_threshold_db:
+        diagnosis_lines.append(
+            f"Δ₁ = {d1:+.2f} dB — forward propagator itself disagrees with theory. "
+            "Check the `s_q → variance` conversion (one-sided vs two-sided density) "
+            "and the 1/r factor."
+        )
+    else:
+        diagnosis_lines.append(
+            "All three rungs within tolerance. The −27 dB bias observed in pipeline "
+            "ext_only runs must therefore enter *outside* the CSM-and-steering path "
+            "— investigate band-integration (`integrate_band_maps`) or GT-comparison."
+        )
+
+    md = [
+        "# Scaling-Ladder Diagnostic Report",
+        "",
+        f"**Config:** {config_summary}",
+        f"**Source PSD:** S_q = {10*np.log10(s_q_pa2_per_hz):.2f} dB re 1 Pa²/Hz",
+        f"**Source position:** {tuple(np.asarray(source_position).tolist())}",
+        f"**Sample rate:** {sample_rate:.0f} Hz",
+        f"**Mics:** {len(mic_positions)} channels",
+        "",
+        "## Rung Deltas (band mean, dB)",
+        "",
+        "| Rung | Description | Δ (dB) | Threshold | Verdict |",
+        "|------|-------------|--------|-----------|---------|",
+        f"| 1 | Direct Welch mic-PSD vs S_q/r²        | {d1:+.3f} | ±0.5 | {verdict(d1, pass_threshold_db)} |",
+        f"| 2 | CSM-diagonal vs S_q/r²                 | {d2:+.3f} | ±0.5 | {verdict(d2, pass_threshold_db)} |",
+        f"| 3 | steer_to_psd at source vs S_q·⟨1/r⟩²   | {d3:+.3f} | ±2.0 | {verdict(d3, pass_3_threshold_db)} |",
+        "",
+        "## Diagnosis",
+        "",
+        diagnosis_lines[0],
+        "",
+        "## Per-mic Δ (Rung 1)",
+        "",
+        "| mic | r (m) | Δ₁ (dB) |",
+        "|-----|-------|---------|",
+    ]
+    r = np.linalg.norm(np.asarray(mic_positions) - np.asarray(source_position)[None, :], axis=1)
+    for m, (rm, d) in enumerate(zip(r, rung1["delta_db_per_mic"])):
+        md.append(f"| {m} | {rm:.3f} | {d:+.3f} |")
+
+    (output_dir / "report.md").write_text("\n".join(md) + "\n")
+
+    metrics = {
+        "rung1": {
+            "delta_db_mean": d1,
+            "delta_db_per_mic": rung1["delta_db_per_mic"].tolist(),
+        },
+        "rung2": {
+            "delta_db_mean": d2,
+            "delta_db_per_mic": rung2["delta_db_per_mic"].tolist(),
+        },
+        "rung3": {
+            "delta_db_band_mean": d3,
+            "geometric_factor": rung3["geometric_factor"],
+        },
+        "config": {
+            "s_q_pa2_per_hz": s_q_pa2_per_hz,
+            "sample_rate": sample_rate,
+            "n_mics": int(len(mic_positions)),
+            "source_position": list(map(float, source_position)),
+        },
+    }
+    (output_dir / "metrics.json").write_text(json.dumps(metrics, indent=2))
