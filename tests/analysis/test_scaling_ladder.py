@@ -97,3 +97,31 @@ def test_rung1_mic_psd_matches_theory_within_0p5_db(sl):
     assert "frequencies_hz" in result
     assert result["delta_db_per_mic"].shape == (mic_positions.shape[0],)
     assert abs(result["delta_db_mean"]) < 0.5
+
+
+def test_rung2_csm_diag_matches_theory_within_0p5_db(sl):
+    rng = np.random.default_rng(11)
+    fs = 51_200.0
+    n_samples = int(fs * 4.0)
+    s_q = 1e-4
+    source_pos = np.array([0.0, 0.0, -1.5])
+    mic_positions = np.array([
+        [0.1, 0.0, 0.0], [-0.1, 0.0, 0.0],
+        [0.0, 0.1, 0.0], [0.0, -0.1, 0.0],
+    ])
+    time_data = sl.propagate_white_noise(
+        n_samples=n_samples, sample_rate=fs, s_q_pa2_per_hz=s_q,
+        source_position=source_pos, mic_positions=mic_positions, rng=rng,
+    )
+    result = sl.rung2_csm_diag(
+        time_data=time_data, sample_rate=fs,
+        s_q_pa2_per_hz=s_q,
+        source_position=source_pos, mic_positions=mic_positions,
+        f_min_hz=200.0, f_max_hz=6000.0,
+        nperseg=512, noverlap=256, window="hann",
+        diag_loading_rel=0.0,   # disable for clean comparison
+    )
+    assert "csm_shape" in result
+    assert "delta_db_per_mic" in result
+    assert "csm" in result and "frequencies_hz" in result
+    assert abs(result["delta_db_mean"]) < 0.5

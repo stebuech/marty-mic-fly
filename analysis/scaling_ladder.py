@@ -99,3 +99,46 @@ def rung1_mic_psd(
         "delta_db_per_mic": delta_db_per_mic,
         "delta_db_mean": float(delta_db_per_mic.mean()),
     }
+
+
+def rung2_csm_diag(
+    *,
+    time_data: np.ndarray,
+    sample_rate: float,
+    s_q_pa2_per_hz: float,
+    source_position: np.ndarray,
+    mic_positions: np.ndarray,
+    f_min_hz: float,
+    f_max_hz: float,
+    nperseg: int,
+    noverlap: int,
+    window: str,
+    diag_loading_rel: float,
+) -> dict:
+    """Rung 2 — production CSM, diagonal vs theoretical S_q / r_m^2."""
+    from martymicfly.processing.csm import CsmConfig, build_measurement_csm
+
+    cfg = CsmConfig(
+        nperseg=nperseg, noverlap=noverlap, window=window,
+        diag_loading_rel=diag_loading_rel,
+        f_min_hz=f_min_hz, f_max_hz=f_max_hz,
+    )
+    csm, freqs = build_measurement_csm(time_data, sample_rate, cfg)
+    diag = np.real(np.diagonal(csm, axis1=1, axis2=2))      # (F, M)
+
+    src = np.asarray(source_position, dtype=np.float64)
+    mics = np.asarray(mic_positions, dtype=np.float64)
+    r = np.linalg.norm(mics - src[None, :], axis=1)
+    theoretical = s_q_pa2_per_hz / (r ** 2)
+
+    measured_per_mic = diag.mean(axis=0)
+    delta_db_per_mic = 10.0 * np.log10(measured_per_mic / theoretical)
+    return {
+        "csm": csm,
+        "csm_shape": csm.shape,
+        "frequencies_hz": freqs,
+        "csm_diag_per_mic": diag,
+        "theoretical_per_mic": theoretical,
+        "delta_db_per_mic": delta_db_per_mic,
+        "delta_db_mean": float(delta_db_per_mic.mean()),
+    }
