@@ -64,3 +64,36 @@ def test_propagate_white_noise_yields_correct_per_mic_psd(sl):
     assert np.all(np.abs(delta_db) < 0.5), (
         f"Per-mic PSD off theory by {delta_db} dB"
     )
+
+
+def test_rung1_mic_psd_matches_theory_within_0p5_db(sl):
+    rng = np.random.default_rng(7)
+    fs = 51_200.0
+    n_samples = int(fs * 4.0)
+    s_q = 1e-4
+
+    source_pos = np.array([0.0, 0.0, -1.5])
+    mic_positions = np.array([
+        [0.1, 0.0, 0.0],
+        [-0.1, 0.0, 0.0],
+        [0.0, 0.1, 0.0],
+        [0.0, -0.1, 0.0],
+    ])
+    time_data = sl.propagate_white_noise(
+        n_samples=n_samples, sample_rate=fs, s_q_pa2_per_hz=s_q,
+        source_position=source_pos, mic_positions=mic_positions, rng=rng,
+    )
+    result = sl.rung1_mic_psd(
+        time_data=time_data,
+        sample_rate=fs,
+        s_q_pa2_per_hz=s_q,
+        source_position=source_pos,
+        mic_positions=mic_positions,
+        f_min_hz=200.0, f_max_hz=6000.0,
+        nperseg=512, noverlap=256, window="hann",
+    )
+    assert "delta_db_per_mic" in result
+    assert "delta_db_mean" in result
+    assert "frequencies_hz" in result
+    assert result["delta_db_per_mic"].shape == (mic_positions.shape[0],)
+    assert abs(result["delta_db_mean"]) < 0.5

@@ -9,6 +9,7 @@ Run via:  uv run python analysis/scaling_ladder.py [--mic-geom PATH]
 from __future__ import annotations
 
 import numpy as np
+from scipy.signal import welch
 
 
 def propagate_white_noise(
@@ -60,3 +61,41 @@ def propagate_white_noise(
         out[:, m] = (1.0 - frac) * q[i0] + frac * q[i0 + 1]
         out[:, m] /= r[m]
     return out
+
+
+def rung1_mic_psd(
+    *,
+    time_data: np.ndarray,         # (N, M)
+    sample_rate: float,
+    s_q_pa2_per_hz: float,
+    source_position: np.ndarray,
+    mic_positions: np.ndarray,
+    f_min_hz: float,
+    f_max_hz: float,
+    nperseg: int,
+    noverlap: int,
+    window: str,
+) -> dict:
+    """Rung 1 — direct Welch PSD per mic, compared to theoretical S_q / r_m^2."""
+    f, p = welch(
+        time_data, fs=sample_rate, nperseg=nperseg, noverlap=noverlap,
+        window=window, scaling="density", axis=0,
+    )
+    mask = (f >= f_min_hz) & (f <= f_max_hz)
+    freqs = f[mask]
+    psd = p[mask, :]                                            # (F, M)
+
+    src = np.asarray(source_position, dtype=np.float64)
+    mics = np.asarray(mic_positions, dtype=np.float64)
+    r = np.linalg.norm(mics - src[None, :], axis=1)             # (M,)
+    theoretical = s_q_pa2_per_hz / (r ** 2)                     # (M,)
+
+    measured_per_mic = psd.mean(axis=0)                         # (M,)
+    delta_db_per_mic = 10.0 * np.log10(measured_per_mic / theoretical)
+    return {
+        "frequencies_hz": freqs,
+        "psd_per_mic": psd,                                     # (F, M)
+        "theoretical_per_mic": theoretical,                     # (M,)
+        "delta_db_per_mic": delta_db_per_mic,
+        "delta_db_mean": float(delta_db_per_mic.mean()),
+    }
