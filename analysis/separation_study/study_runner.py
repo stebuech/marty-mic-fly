@@ -91,6 +91,10 @@ def execute_plan(plan: list[dict], scenario_paths: dict, *,
             )
 
         cfg_path = Path(spec["config"])
+        cfg_yaml = yaml.safe_load(cfg_path.read_text())
+        af_stage_cfg = next(s for s in cfg_yaml["stages"]
+                            if s.get("kind") == "array_filter")
+
         overrides = dict(spec["overrides"])
         # Only override input paths when scenario_paths supplies them — otherwise
         # the config keeps its own audio_h5/ground_truth_h5 (per-config-correct
@@ -103,6 +107,17 @@ def execute_plan(plan: list[dict], scenario_paths: dict, *,
         # per mixed run × 72+ runs = excessive). Study has its own plots.
         overrides.setdefault("plots.enabled", False)
 
+        # Auto-fix: nperseg override must not break existing noverlap (scipy
+        # requires noverlap < nperseg). When the override drops nperseg below
+        # the config's noverlap, halve noverlap so the constraint holds.
+        nperseg_key = "array_filter.csm.nperseg"
+        noverlap_key = "array_filter.csm.noverlap"
+        if nperseg_key in overrides and noverlap_key not in overrides:
+            new_nperseg = int(overrides[nperseg_key])
+            current_noverlap = int(af_stage_cfg["csm"]["noverlap"])
+            if current_noverlap >= new_nperseg:
+                overrides[noverlap_key] = new_nperseg // 2
+
         log.info("run %s overrides=%s", spec["run_id"], overrides)
         actual_run_dir = run_pipeline_with_overrides(
             base_config_path=cfg_path,
@@ -110,20 +125,21 @@ def execute_plan(plan: list[dict], scenario_paths: dict, *,
             output_dir=run_dir,
         )
 
-        # Metric augmentation needs config bands + mic_positions + target
-        bands_cfg = yaml.safe_load(cfg_path.read_text())["stages"]
-        af_stage = next(s for s in bands_cfg if s.get("kind") == "array_filter")
+        # Metric augmentation needs config bands + mic_positions + target.
+        # Use the OVERRIDE-aware view of csm params so the augmentation is
+        # apples-to-apples with what the pipeline actually computed.
+        af_stage = af_stage_cfg
         bands = af_stage["bands"]
         target_point = tuple(af_stage["target_point_m"])
-        nperseg = int(af_stage["csm"]["nperseg"])
-        noverlap = int(af_stage["csm"]["noverlap"])
+        nperseg = int(overrides.get(nperseg_key, af_stage["csm"]["nperseg"]))
+        noverlap = int(overrides.get(noverlap_key, af_stage["csm"]["noverlap"]))
         window = af_stage["csm"]["window"]
-        diag = float(af_stage["csm"].get("diag_loading_rel", 0.0))
+        diag = float(overrides.get("array_filter.csm.diag_loading_rel",
+                                   af_stage["csm"].get("diag_loading_rel", 0.0)))
         f_min = float(af_stage["csm"].get("f_min_hz", 0.0))
         f_max = float(af_stage["csm"].get("f_max_hz", 1.0e9))
-        full_cfg = yaml.safe_load(cfg_path.read_text())
-        seg_duration = float(full_cfg.get("segment", {}).get("duration", 10.0))
-        seg_mode = str(full_cfg.get("segment", {}).get("mode", "middle"))
+        seg_duration = float(cfg_yaml.get("segment", {}).get("duration", 10.0))
+        seg_mode = str(cfg_yaml.get("segment", {}).get("mode", "middle"))
         mic_positions = load_mic_geom_xml(sp["mic_geom_xml"])
 
         ext_gt = Path(sp["ext_only_gt_h5"])
