@@ -78,3 +78,79 @@ def band_metrics(
         "d_unflt": d_unflt,
         "p_post": p_post,
     }
+
+
+import h5py
+from pathlib import Path
+from scipy.signal import welch as _scipy_welch
+
+
+def _welch_signal_h5(path: Path, *, nperseg: int, noverlap: int, window: str,
+                    ) -> tuple[np.ndarray, np.ndarray, float]:
+    with h5py.File(path, "r") as f:
+        td = np.asarray(f["time_data"][:], dtype=np.float64)
+        fs = float(f["time_data"].attrs["sample_freq"])
+    sig = td[:, 0] if td.ndim == 2 else td
+    f_w, psd = _scipy_welch(sig, fs=fs, window=window, nperseg=nperseg,
+                            noverlap=noverlap, scaling="density")
+    return f_w, psd, fs
+
+
+def compute_run_metrics(
+    *,
+    psd_post: np.ndarray,
+    frequencies: np.ndarray,
+    ext_gt_h5: Path,
+    mixed_gt_h5: Path,
+    welch_nperseg: int,
+    welch_noverlap: int,
+    window: str,
+    bands: list[dict],
+    welch_floor_db: float,
+) -> dict:
+    """Erzeuge alle Studien-Metriken pro Band aus psd_post + GT-h5-Pfaden.
+
+    `psd_post` und `frequencies` müssen konsistent sein (gleiche Welch-Parameter
+    wie für ext_GT/D_ref). Aufrufer ist verantwortlich für `range_compensation_factor`-
+    Anwendung auf psd_post."""
+    f_ext, psd_ext_gt, fs_ext = _welch_signal_h5(
+        ext_gt_h5, nperseg=welch_nperseg, noverlap=welch_noverlap, window=window,
+    )
+    f_mix, psd_mix_gt, fs_mix = _welch_signal_h5(
+        mixed_gt_h5, nperseg=welch_nperseg, noverlap=welch_noverlap, window=window,
+    )
+    if not np.allclose(f_ext, f_mix):
+        raise ValueError("freq grid mismatch ext_gt vs mixed_gt")
+    psd_d_ref = psd_mix_gt - psd_ext_gt   # Linearität: PSD(mix) - PSD(ext) ≈ PSD(drone)
+    # Für negative Werte aus Welch-Streuung clamped auf 0
+    psd_d_ref = np.maximum(psd_d_ref, 0.0)
+
+    # psd_post ist auf einem (i.d.R. groberen) Frequenzgitter — interpoliere
+    # ext/d_ref auf das psd_post-Gitter.
+    psd_ext_on_post = np.interp(frequencies, f_ext, psd_ext_gt)
+    psd_d_on_post = np.interp(frequencies, f_ext, psd_d_ref)
+
+    delta_f_post = float(frequencies[1] - frequencies[0])
+
+    out: dict = {"bands": {}, "frequency_resolved": {
+        "frequencies": frequencies,
+        "psd_post": psd_post,
+        "ext_gt": psd_ext_on_post,
+        "d_ref": psd_d_on_post,
+    }}
+    for band in bands:
+        name = band["name"]
+        f_lo = float(band["f_min_hz"])
+        f_hi = float(band["f_max_hz"])
+        mask = (frequencies >= f_lo) & (frequencies <= f_hi)
+        if not mask.any():
+            continue
+        m = band_metrics(
+            psd_post=psd_post[mask],
+            ext_gt=psd_ext_on_post[mask],
+            d_ref=psd_d_on_post[mask],
+            delta_f=delta_f_post,
+            welch_floor_db=welch_floor_db,
+        )
+        out["bands"][name] = m
+    return out
