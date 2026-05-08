@@ -164,7 +164,7 @@ Run erhoben.
 | `csm.nperseg` | 512 | {256, 1024} |
 | `csm.diag_loading_rel` | 1e-6 | {0, 1e-4} |
 | `doa_grid.rotor_cone_half_angle_deg` | 30 | {20, 45} |
-| `doa_grid.drone_cone_half_angle_deg` | 45 | {30, 60} |
+| `doa_grid.drone_disk_half_width_deg` | 15 | {8, 25} |
 | `doa_grid.target_cone_half_angle_deg` | 45 | {30, 60} |
 | `doa_grid.focal_radius_m` | 1.5 | {1.0, 2.0} |
 | `doa_grid.az_step_deg × el_step_deg` | 5×5 | {3×3, 10×10} |
@@ -223,7 +223,7 @@ gemittelt auf S0_baseline; bei Gleichstand niedrigstes `drone_leakage_db_def2`).
 |---|---|
 | `clean_sc.damp` | {0.2, 0.4, 0.6, 0.7, 0.8, 0.9, 0.95} |
 | `clean_sc.n_iter` | {30, 60, 100, 150, 200, 300, 500} |
-| `doa_grid.drone_cone_half_angle_deg` | {15, 25, 35, 45, 55, 65, 75} |
+| `doa_grid.drone_disk_half_width_deg` | {5, 10, 15, 20, 25, 35, 45} |
 | `csm.nperseg` | {128, 256, 512, 1024, 2048} |
 
 ### Wechselwirkungs-Grid
