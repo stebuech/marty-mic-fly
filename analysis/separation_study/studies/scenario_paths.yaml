@@ -11,7 +11,9 @@ S0:
   drone_artifact: /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/drone_source_artifact_gaptip.h5
   mic_geom_xml:   /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/mic_geom.xml
   ext_only_gt_h5: /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/ap2a_synth_external_only_gaptip_gt.h5
-  mixed_gt_h5:    /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/ap2a_synth_mixed_gaptip_gt.h5
+  # mic-array audio (16-channel) for drone-only-CSM via mixed - ext subtraction
+  ext_only_audio_h5: /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/ap2a_synth_external_only_gaptip.h5
+  mixed_audio_h5:    /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/ap2a_synth_mixed_gaptip.h5
 
 S1:
   drone_artifact: /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/drone_source_artifact_gaptip.h5

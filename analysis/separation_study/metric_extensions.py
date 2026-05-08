@@ -99,36 +99,32 @@ def _welch_signal_h5(path: Path, *, nperseg: int, noverlap: int, window: str,
 def compute_run_metrics(
     *,
     psd_post: np.ndarray,
+    psd_d_ref: np.ndarray,
     frequencies: np.ndarray,
     ext_gt_h5: Path,
-    mixed_gt_h5: Path,
     welch_nperseg: int,
     welch_noverlap: int,
     window: str,
     bands: list[dict],
     welch_floor_db: float,
 ) -> dict:
-    """Erzeuge alle Studien-Metriken pro Band aus psd_post + GT-h5-Pfaden.
+    """Erzeuge alle Studien-Metriken pro Band aus psd_post + ext-GT + drone-D_ref.
 
-    `psd_post` und `frequencies` müssen konsistent sein (gleiche Welch-Parameter
-    wie für ext_GT/D_ref). Aufrufer ist verantwortlich für `range_compensation_factor`-
-    Anwendung auf psd_post."""
-    f_ext, psd_ext_gt, fs_ext = _welch_signal_h5(
+    `psd_post`, `psd_d_ref` und `frequencies` müssen konsistent sein (gleiche
+    Welch-Parameter, gleiches Frequenzgitter). Aufrufer ist verantwortlich für
+    `range_compensation_factor`-Anwendung auf psd_post.
+
+    `psd_d_ref` ist die ungefilterte Drohnen-PSD am Target — gesteuert vom
+    drone-only-CSM (mic-Array-Audio mixed minus ext, dann CSM, dann
+    steer_to_psd · cal). Der Aufrufer (pipeline_wrapper) berechnet diese.
+    `ext_gt_h5` enthält das ext-Quellsignal (welch davon = ext_GT)."""
+    assert psd_post.shape == psd_d_ref.shape == frequencies.shape, "shape mismatch"
+    f_ext, psd_ext_gt, _ = _welch_signal_h5(
         ext_gt_h5, nperseg=welch_nperseg, noverlap=welch_noverlap, window=window,
     )
-    f_mix, psd_mix_gt, fs_mix = _welch_signal_h5(
-        mixed_gt_h5, nperseg=welch_nperseg, noverlap=welch_noverlap, window=window,
-    )
-    if not np.allclose(f_ext, f_mix):
-        raise ValueError("freq grid mismatch ext_gt vs mixed_gt")
-    psd_d_ref = psd_mix_gt - psd_ext_gt   # Linearität: PSD(mix) - PSD(ext) ≈ PSD(drone)
-    # Für negative Werte aus Welch-Streuung clamped auf 0
-    psd_d_ref = np.maximum(psd_d_ref, 0.0)
-
     # psd_post ist auf einem (i.d.R. groberen) Frequenzgitter — interpoliere
-    # ext/d_ref auf das psd_post-Gitter.
+    # ext_gt auf das psd_post-Gitter (psd_d_ref ist bereits dort).
     psd_ext_on_post = np.interp(frequencies, f_ext, psd_ext_gt)
-    psd_d_on_post = np.interp(frequencies, f_ext, psd_d_ref)
 
     delta_f_post = float(frequencies[1] - frequencies[0])
 
@@ -136,7 +132,7 @@ def compute_run_metrics(
         "frequencies": frequencies,
         "psd_post": psd_post,
         "ext_gt": psd_ext_on_post,
-        "d_ref": psd_d_on_post,
+        "d_ref": psd_d_ref,
     }}
     for band in bands:
         name = band["name"]
@@ -148,7 +144,7 @@ def compute_run_metrics(
         m = band_metrics(
             psd_post=psd_post[mask],
             ext_gt=psd_ext_on_post[mask],
-            d_ref=psd_d_on_post[mask],
+            d_ref=psd_d_ref[mask],
             delta_f=delta_f_post,
             welch_floor_db=welch_floor_db,
         )

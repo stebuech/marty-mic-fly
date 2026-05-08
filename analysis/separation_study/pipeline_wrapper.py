@@ -36,11 +36,52 @@ def _load_psd_post_from_run(
     return psd_post * cal, freqs
 
 
+def _drone_only_psd_at_target(
+    *,
+    ext_only_audio_h5: Path,
+    mixed_audio_h5: Path,
+    mic_positions: np.ndarray,
+    target_point: tuple[float, float, float],
+    csm_nperseg: int,
+    csm_noverlap: int,
+    csm_window: str,
+    csm_diag_loading: float,
+    f_min_hz: float,
+    f_max_hz: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Build drone-only mic-array audio via mixed - ext subtraction, then CSM,
+    then steer_to_psd at target. Returns (frequencies, psd_d_ref) where
+    psd_d_ref includes the range_compensation_factor."""
+    from martymicfly.io.synth_h5 import load_synth_h5
+    from martymicfly.processing.csm import CsmConfig, build_measurement_csm
+    from martymicfly.processing.steering import (
+        steer_to_psd, range_compensation_factor,
+    )
+
+    ext_src = load_synth_h5(str(ext_only_audio_h5))
+    mix_src = load_synth_h5(str(mixed_audio_h5))
+    fs = float(ext_src["sample_rate"])
+    if fs != float(mix_src["sample_rate"]):
+        raise ValueError("sample_rate mismatch ext_only vs mixed audio")
+    drone_audio = (mix_src["time_data"].astype(np.float64)
+                   - ext_src["time_data"].astype(np.float64))
+    cfg = CsmConfig(
+        nperseg=csm_nperseg, noverlap=csm_noverlap, window=csm_window,
+        diag_loading_rel=csm_diag_loading,
+        f_min_hz=f_min_hz, f_max_hz=f_max_hz,
+    )
+    drone_csm, freqs = build_measurement_csm(drone_audio, fs, cfg)
+    psd_pre = steer_to_psd(drone_csm, freqs, mic_positions, target_point)
+    cal = range_compensation_factor(mic_positions, target_point)
+    return freqs, psd_pre * cal
+
+
 def augment_metrics(
     *,
     run_dir: Path,
     ext_gt_h5: Path,
-    mixed_gt_h5: Path,
+    ext_only_audio_h5: Path,
+    mixed_audio_h5: Path,
     bands: list[dict],
     mic_positions: np.ndarray,
     target_point: tuple[float, float, float],
@@ -48,11 +89,25 @@ def augment_metrics(
     welch_noverlap: int,
     window: str,
     welch_floor_db: float,
+    csm_diag_loading: float = 0.0,
+    f_min_hz: float = 0.0,
+    f_max_hz: float = 1.0e9,
 ) -> dict:
     psd_post, freqs = _load_psd_post_from_run(run_dir, mic_positions, target_point)
+    freqs_d, psd_d_ref = _drone_only_psd_at_target(
+        ext_only_audio_h5=ext_only_audio_h5,
+        mixed_audio_h5=mixed_audio_h5,
+        mic_positions=mic_positions, target_point=target_point,
+        csm_nperseg=welch_nperseg, csm_noverlap=welch_noverlap,
+        csm_window=window, csm_diag_loading=csm_diag_loading,
+        f_min_hz=f_min_hz, f_max_hz=f_max_hz,
+    )
+    if not np.allclose(freqs, freqs_d):
+        # Different freq grids — interpolate d_ref onto post grid
+        psd_d_ref = np.interp(freqs, freqs_d, psd_d_ref)
     out = compute_run_metrics(
-        psd_post=psd_post, frequencies=freqs,
-        ext_gt_h5=ext_gt_h5, mixed_gt_h5=mixed_gt_h5,
+        psd_post=psd_post, psd_d_ref=psd_d_ref, frequencies=freqs,
+        ext_gt_h5=ext_gt_h5,
         welch_nperseg=welch_nperseg, welch_noverlap=welch_noverlap, window=window,
         bands=bands, welch_floor_db=welch_floor_db,
     )

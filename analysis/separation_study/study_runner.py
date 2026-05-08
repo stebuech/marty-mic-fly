@@ -118,15 +118,23 @@ def execute_plan(plan: list[dict], scenario_paths: dict, *,
         nperseg = int(af_stage["csm"]["nperseg"])
         noverlap = int(af_stage["csm"]["noverlap"])
         window = af_stage["csm"]["window"]
+        diag = float(af_stage["csm"].get("diag_loading_rel", 0.0))
+        f_min = float(af_stage["csm"].get("f_min_hz", 0.0))
+        f_max = float(af_stage["csm"].get("f_max_hz", 1.0e9))
         mic_positions = load_mic_geom_xml(sp["mic_geom_xml"])
 
         ext_gt = Path(sp["ext_only_gt_h5"])
-        mixed_gt = Path(sp["mixed_gt_h5"])
+        # Drone-only D_ref is built by subtracting ext-only mic-array audio
+        # from mixed mic-array audio at the array level, then steering.
+        ext_only_audio = Path(sp["ext_only_audio_h5"])
+        mixed_audio = Path(sp["mixed_audio_h5"])
         augment_metrics(
-            run_dir=actual_run_dir, ext_gt_h5=ext_gt, mixed_gt_h5=mixed_gt,
+            run_dir=actual_run_dir, ext_gt_h5=ext_gt,
+            ext_only_audio_h5=ext_only_audio, mixed_audio_h5=mixed_audio,
             bands=bands, mic_positions=mic_positions, target_point=target_point,
             welch_nperseg=nperseg, welch_noverlap=noverlap, window=window,
             welch_floor_db=-50.0,
+            csm_diag_loading=diag, f_min_hz=f_min, f_max_hz=f_max,
         )
 
         (actual_run_dir / "run_meta.json").write_text(json.dumps({
