@@ -1,0 +1,155 @@
+"""Study runner — expandiert Studie-YAML in Liste von Run-Specs und führt sie aus.
+
+Schema einer Studie:
+  phase: baseline | phase1 | phase2
+  configs: list of base-config yaml paths
+  scenarios: list of S0..S3
+  axes: dict[dotted_key, list_of_values]
+  output_root: results-dir
+
+Pro Achse wird ein einzelner-Knopf-Sweep generiert (alle anderen Achsen bleiben
+auf base-config-Defaults). Plus 1 Baseline-Run pro (config, scenario) ohne
+Override."""
+from __future__ import annotations
+
+import argparse
+import json
+import logging
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+from analysis.separation_study.run_cache import config_hash, is_run_complete
+
+log = logging.getLogger("separation_study.runner")
+
+
+def _slug(value: Any) -> str:
+    return str(value).replace("/", "_").replace(".", "p").replace(" ", "_")
+
+
+def expand_run_plan(study: dict) -> list[dict]:
+    """Pro (config, scenario) ein Baseline-Run + pro (axis, value) ein Override-Run."""
+    plan: list[dict] = []
+    output_root = Path(study["output_root"])
+    for cfg_path in study["configs"]:
+        cfg_name = Path(cfg_path).stem
+        for scenario in study["scenarios"]:
+            plan.append({
+                "config": cfg_path,
+                "scenario": scenario,
+                "overrides": {},
+                "run_id": f"{cfg_name}__{scenario}__baseline",
+                "output_dir": str(output_root /
+                                  f"{cfg_name}__{scenario}__baseline"),
+            })
+            for axis, values in study.get("axes", {}).items():
+                for v in values:
+                    overrides = {axis: v}
+                    h = config_hash(overrides)
+                    rid = f"{cfg_name}__{scenario}__{_slug(axis)}_{_slug(v)}_{h}"
+                    plan.append({
+                        "config": cfg_path,
+                        "scenario": scenario,
+                        "overrides": overrides,
+                        "run_id": rid,
+                        "output_dir": str(output_root / rid),
+                    })
+    return plan
+
+
+def execute_plan(plan: list[dict], scenario_paths: dict, *,
+                 force: bool = False) -> list[dict]:
+    """Führt jeden Run-Spec aus, überspringt bereits komplette Runs."""
+    from analysis.separation_study.pipeline_wrapper import (
+        augment_metrics, run_pipeline_with_overrides,
+    )
+    from analysis.separation_study.synth_scenarios import ensure_scenario
+    from martymicfly.io.mic_geom import load_mic_geom_xml
+
+    results: list[dict] = []
+    for spec in plan:
+        run_dir = Path(spec["output_dir"])
+        if not force and is_run_complete(run_dir):
+            log.info("skip %s — already complete", spec["run_id"])
+            results.append({**spec, "status": "skipped"})
+            continue
+
+        scenario = spec["scenario"]
+        sp = scenario_paths[scenario]
+        ensure_scenario(
+            scenario=scenario,
+            base_drone_artifact=sp["drone_artifact"],
+            mic_geom_xml=sp["mic_geom_xml"],
+            out_synth_h5=Path(sp["audio_h5"]),
+            out_gt_h5=Path(sp["ground_truth_h5"]),
+        )
+
+        cfg_path = Path(spec["config"])
+        overrides = dict(spec["overrides"])
+        overrides.setdefault("input.audio_h5", sp["audio_h5"])
+        overrides.setdefault("input.ground_truth_h5", sp["ground_truth_h5"])
+
+        log.info("run %s overrides=%s", spec["run_id"], overrides)
+        run_pipeline_with_overrides(
+            base_config_path=cfg_path,
+            overrides=overrides,
+            output_dir=run_dir,
+        )
+
+        # Metric augmentation needs config bands + mic_positions + target
+        bands_cfg = yaml.safe_load(cfg_path.read_text())["stages"]
+        af_stage = next(s for s in bands_cfg if s.get("kind") == "array_filter")
+        bands = af_stage["bands"]
+        target_point = tuple(af_stage["target_point_m"])
+        nperseg = int(af_stage["csm"]["nperseg"])
+        noverlap = int(af_stage["csm"]["noverlap"])
+        window = af_stage["csm"]["window"]
+        mic_positions = load_mic_geom_xml(sp["mic_geom_xml"])
+
+        ext_gt = Path(sp["ext_only_gt_h5"])
+        mixed_gt = Path(sp["ground_truth_h5"])
+        augment_metrics(
+            run_dir=run_dir, ext_gt_h5=ext_gt, mixed_gt_h5=mixed_gt,
+            bands=bands, mic_positions=mic_positions, target_point=target_point,
+            welch_nperseg=nperseg, welch_noverlap=noverlap, window=window,
+            welch_floor_db=-50.0,
+        )
+
+        (run_dir / "run_meta.json").write_text(json.dumps({
+            "run_id": spec["run_id"],
+            "config": spec["config"],
+            "scenario": spec["scenario"],
+            "overrides": spec["overrides"],
+            "method": Path(spec["config"]).stem,
+        }, indent=2))
+
+        results.append({**spec, "status": "ok"})
+    return results
+
+
+def main(argv: list[str] | None = None) -> int:
+    p = argparse.ArgumentParser()
+    p.add_argument("--study", type=Path, required=True)
+    p.add_argument("--scenario-paths", type=Path, required=True,
+                   help="YAML mapping scenario → file paths")
+    p.add_argument("--force", action="store_true")
+    p.add_argument("--log-level", default="INFO")
+    args = p.parse_args(argv)
+    logging.basicConfig(level=args.log_level,
+                        format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    study = yaml.safe_load(args.study.read_text())
+    scenario_paths = yaml.safe_load(args.scenario_paths.read_text())
+    plan = expand_run_plan(study)
+    log.info("expanded %d runs", len(plan))
+    results = execute_plan(plan, scenario_paths, force=args.force)
+    summary = {"total": len(results),
+               "ok": sum(1 for r in results if r["status"] == "ok"),
+               "skipped": sum(1 for r in results if r["status"] == "skipped")}
+    log.info("done: %s", summary)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

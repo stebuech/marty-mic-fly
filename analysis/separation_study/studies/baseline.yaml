@@ -1,0 +1,13 @@
+phase: baseline
+output_root: results/separation_study/baseline
+scenarios: [S0]
+axes: {}
+configs:
+  - configs/pipeline_external_only_doa_rotor_cone.yaml
+  - configs/pipeline_external_only_doa_drone_cone.yaml
+  - configs/pipeline_external_only_doa_target_cone.yaml
+  - configs/pipeline_external_only_nnls.yaml
+  - configs/pipeline_mixed_doa_rotor_cone.yaml
+  - configs/pipeline_mixed_doa_drone_cone.yaml
+  - configs/pipeline_mixed_doa_target_cone.yaml
+  - configs/pipeline_mixed_nnls.yaml
