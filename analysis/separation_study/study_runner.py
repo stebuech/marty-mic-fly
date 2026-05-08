@@ -99,6 +99,9 @@ def execute_plan(plan: list[dict], scenario_paths: dict, *,
             overrides.setdefault("input.audio_h5", sp["audio_h5"])
         if "ground_truth_h5" in sp:
             overrides.setdefault("input.ground_truth_h5", sp["ground_truth_h5"])
+        # Disk-saving: study runs don't need per-channel notch plots (~14 MB
+        # per mixed run × 72+ runs = excessive). Study has its own plots.
+        overrides.setdefault("plots.enabled", False)
 
         log.info("run %s overrides=%s", spec["run_id"], overrides)
         actual_run_dir = run_pipeline_with_overrides(
@@ -133,6 +136,20 @@ def execute_plan(plan: list[dict], scenario_paths: dict, *,
             "overrides": spec["overrides"],
             "method": Path(spec["config"]).stem,
         }, indent=2))
+
+        # Disk-saving cleanup: filtered.h5 is the post-notch audio (~350 MB
+        # for mixed runs at 10s × 16 mics × 51200 Hz), not needed for the
+        # study (we keep residual_csm.h5, metrics*, run_meta).
+        for big in ("filtered.h5",):
+            p = actual_run_dir / big
+            if p.exists():
+                p.unlink()
+        # Also drop the plots/ subdir (per-channel notch plots) if it slipped
+        # past the plots.enabled override.
+        plots_dir = actual_run_dir / "plots"
+        if plots_dir.exists():
+            import shutil as _shutil
+            _shutil.rmtree(plots_dir)
 
         results.append({**spec, "status": "ok",
                         "actual_run_dir": str(actual_run_dir)})
