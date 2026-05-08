@@ -55,7 +55,7 @@ def main(argv: list[str] | None = None) -> int:
         doa_hemisphere=doa.hemisphere,
         rotor_cone_half_angle_deg=float(doa.rotor_cone_half_angle_deg),
         target_cone_half_angle_deg=float(doa.target_cone_half_angle_deg),
-        drone_cone_half_angle_deg=float(doa.drone_cone_half_angle_deg),
+        drone_disk_half_width_deg=float(doa.drone_disk_half_width_deg),
         out_path=args.out,
     )
     log.info("wrote %s", args.out)

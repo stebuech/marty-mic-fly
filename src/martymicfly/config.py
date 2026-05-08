@@ -164,7 +164,11 @@ class DoaGridConfig(BaseModel):
     hemisphere: Literal["lower", "upper", "full"] = "lower"
     rotor_cone_half_angle_deg: float = Field(default=30.0, gt=0.0, le=180.0)
     target_cone_half_angle_deg: float = Field(default=30.0, gt=0.0, le=180.0)
-    drone_cone_half_angle_deg: float = Field(default=45.0, gt=0.0, le=180.0)
+    # drone_cone is now a "drone disk": an equatorial belt around the rotor
+    # plane, built as the complement of two ±z cones with large opening
+    # angles. This parameter is the half-width of the belt in degrees of
+    # elevation off the rotor plane (so 15° → ±15° band).
+    drone_disk_half_width_deg: float = Field(default=15.0, gt=0.0, le=90.0)
 
 
 class AtomSetConfig(BaseModel):

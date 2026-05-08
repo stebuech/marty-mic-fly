@@ -18,6 +18,7 @@ from martymicfly.processing.array_filter import (
 )
 from martymicfly.processing.beamform_grid import (
     build_doa_cone_mask,
+    build_doa_disk_mask,
     inter_rotor_midpoints_3xR,
     build_doa_grid,
     build_rotor_doa_cones_mask,
@@ -64,10 +65,8 @@ class DoaArrayFilterStage(ArrayFilterStage):
         gcfg = self.cfg.doa_grid
         plat = ctx.metadata["platform"]
         rotor_positions = np.asarray(plat["rotor_positions"])
-        # rotor_cone and drone_cone both center on inter-rotor midpoints — the
-        # broadband downwash radiation has its spatial centroid between the
-        # rotors, not on them. Same axis directions for both, just different
-        # half-angles.
+        # rotor_cone centers on inter-rotor midpoints — the broadband downwash
+        # radiation has its spatial centroid between the rotors, not on them.
         cone_axes = inter_rotor_midpoints_3xR(rotor_positions)
 
         rotor_cone_mask = build_rotor_doa_cones_mask(
@@ -84,10 +83,12 @@ class DoaArrayFilterStage(ArrayFilterStage):
             fit_input.positions, target_dir, gcfg.target_cone_half_angle_deg,
         )
 
-        # drone_cone is a wider union of inter-rotor cones — analogous to
-        # drone_box being a wider catch than rotor_disc in the Cartesian variant.
-        drone_cone_mask = build_rotor_doa_cones_mask(
-            fit_input.positions, cone_axes, gcfg.drone_cone_half_angle_deg,
+        # drone_cone is now a "drone disk" — the equatorial belt around the
+        # rotor plane (z=0). Built as the complement of two cones along ±z
+        # with large opening angles, so all near-axial DOAs are excluded and
+        # only DOAs roughly in the rotor plane survive.
+        drone_cone_mask = build_doa_disk_mask(
+            fit_input.positions, gcfg.drone_disk_half_width_deg,
         )
 
         if self.cfg.mask_mode == "rotor_cone":

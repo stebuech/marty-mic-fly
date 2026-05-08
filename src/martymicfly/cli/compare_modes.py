@@ -50,6 +50,7 @@ from martymicfly.processing.algorithms.base import (
 from martymicfly.processing.beamform_grid import (
     build_diagnostic_grid,
     build_doa_cone_mask,
+    build_doa_disk_mask,
     build_doa_grid,
     build_rotor_disc_mask,
     build_rotor_doa_cones_mask,
@@ -216,8 +217,8 @@ def compare_doa_modes(
     target_cone_mask = build_doa_cone_mask(
         diag_grid, target_dir, gcfg.target_cone_half_angle_deg,
     )
-    drone_cone_mask = build_rotor_doa_cones_mask(
-        diag_grid, rotor_positions, gcfg.drone_cone_half_angle_deg,
+    drone_cone_mask = build_doa_disk_mask(
+        diag_grid, gcfg.drone_disk_half_width_deg,
     )
     psd_pre = steer_to_psd(csm, freqs, mic_positions, stage_cfg.target_point_m)
 

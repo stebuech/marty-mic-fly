@@ -179,6 +179,34 @@ def build_rotor_doa_cones_mask(
     return mask
 
 
+def build_doa_disk_mask(
+    grid_positions: np.ndarray,
+    disk_half_width_deg: float,
+    axis_xyz: tuple[float, float, float] | np.ndarray = (0.0, 0.0, 1.0),
+) -> np.ndarray:
+    """Boolean mask: True for grid cells whose unit direction (from origin)
+    lies within ``disk_half_width_deg`` of the equatorial plane normal to
+    ``axis_xyz`` — i.e. an angular belt around the rotor plane.
+
+    Implemented as the complement of two cones along ±axis with half-angle
+    ``90° - disk_half_width_deg`` (so a small ``disk_half_width_deg`` yields
+    a thin equatorial slab and rejects all near-axial directions).
+    """
+    if not (0.0 < float(disk_half_width_deg) <= 90.0):
+        raise ValueError(
+            f"disk_half_width_deg must be in (0, 90]; got {disk_half_width_deg}"
+        )
+    axis = np.asarray(axis_xyz, dtype=np.float64).reshape(3)
+    if float(np.linalg.norm(axis)) < 1e-12:
+        raise ValueError("axis_xyz must be non-zero")
+    cone_half = 90.0 - float(disk_half_width_deg)
+    pos = build_doa_cone_mask(grid_positions, axis, cone_half)
+    neg = build_doa_cone_mask(grid_positions, -axis, cone_half)
+    grid_norms = np.linalg.norm(grid_positions, axis=1)
+    valid = grid_norms > 1e-12
+    return valid & ~(pos | neg)
+
+
 def inter_rotor_midpoints_3xR(rotor_positions: np.ndarray, tol: float = 0.10) -> np.ndarray:
     """Midpoints between nearest-neighbor rotor pairs, in (3, M) layout.
 

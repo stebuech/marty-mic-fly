@@ -483,6 +483,29 @@ def _cone_surface(
     )
 
 
+def _disk_band_surface(
+    radius: float, half_width_deg: float, color: str, opacity: float,
+    name: str, n_az: int = 72, n_el: int = 11,
+) -> go.Surface:
+    """Equatorial band on the focal sphere between elevation ±half_width_deg
+    — visual analogue of build_doa_disk_mask."""
+    el = np.linspace(-half_width_deg, half_width_deg, n_el)
+    az = np.linspace(0.0, 360.0, n_az)
+    AZ, EL = np.meshgrid(az, el, indexing="ij")
+    az_r = np.deg2rad(AZ); el_r = np.deg2rad(EL)
+    X = radius * np.cos(el_r) * np.cos(az_r)
+    Y = radius * np.cos(el_r) * np.sin(az_r)
+    Z = radius * np.sin(el_r)
+    return go.Surface(
+        x=X, y=Y, z=Z,
+        surfacecolor=np.zeros_like(X),
+        colorscale=[[0, color], [1, color]],
+        showscale=False, opacity=opacity, name=name,
+        showlegend=True, legendgroup=name,
+        hovertemplate=f"{name}<extra></extra>",
+    )
+
+
 def _hemisphere_surface(
     radius: float, hemisphere: str, color: str, opacity: float,
     name: str, n_az: int = 72, n_el: int = 19,
@@ -521,7 +544,7 @@ def build_mask_geometry_3d_fig(
     doa_hemisphere: str,
     rotor_cone_half_angle_deg: float,
     target_cone_half_angle_deg: float,
-    drone_cone_half_angle_deg: float,
+    drone_disk_half_width_deg: float,
 ) -> go.Figure:
     """3D visualization of the DOA cone mask geometry.
 
@@ -558,8 +581,8 @@ def build_mask_geometry_3d_fig(
         color="#1f77b4", opacity=0.10,
         name=f"focal sphere ({doa_hemisphere}, r={doa_focal_radius_m:.2f}m)",
     ))
-    # rotor_cone and drone_cone share the same axes — inter-rotor midpoints —
-    # which is what the DoaArrayFilterStage actually computes with.
+    # rotor_cone axes — inter-rotor midpoints — which is what the
+    # DoaArrayFilterStage actually computes with.
     from martymicfly.processing.beamform_grid import inter_rotor_midpoints_3xR
     cone_axes = inter_rotor_midpoints_3xR(rotor_positions)
     M = cone_axes.shape[1]
@@ -579,17 +602,23 @@ def build_mask_geometry_3d_fig(
             color="#ff7f0e", opacity=0.30,
             name=f"rotor_cone[{i}]" if M > 1 else "rotor_cone",
         ))
-    for i in range(M):
-        d = cone_axes[:, i]
-        if float(np.linalg.norm(d)) < 1e-9:
-            continue
+    # drone_cone is the equatorial belt around the rotor plane — visualize
+    # both the disk band (kept) and the two ±z exclusion cones (rejected).
+    cone_half = max(0.0, 90.0 - float(drone_disk_half_width_deg))
+    for sign, label in ((1.0, "+z"), (-1.0, "-z")):
         fig.add_trace(_cone_surface(
-            direction_xyz=d,
-            half_angle_deg=drone_cone_half_angle_deg,
+            direction_xyz=np.array([0.0, 0.0, sign]),
+            half_angle_deg=cone_half,
             height=doa_focal_radius_m,
-            color="#d62728", opacity=0.18,
-            name=f"drone_cone[{i}]" if M > 1 else "drone_cone",
+            color="#7f7f7f", opacity=0.10,
+            name=f"drone_disk excl ({label})",
         ))
+    fig.add_trace(_disk_band_surface(
+        radius=doa_focal_radius_m,
+        half_width_deg=float(drone_disk_half_width_deg),
+        color="#d62728", opacity=0.25,
+        name="drone_cone (disk)",
+    ))
     target_dir = target if float(np.linalg.norm(target)) > 1e-9 else np.array([0.0, 0.0, -1.0])
     fig.add_trace(_cone_surface(
         direction_xyz=target_dir,

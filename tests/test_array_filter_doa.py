@@ -33,7 +33,7 @@ def _doa_cfg(mask_mode="target_cone", **overrides):
             hemisphere="lower",
             rotor_cone_half_angle_deg=30.0,
             target_cone_half_angle_deg=30.0,
-            drone_cone_half_angle_deg=45.0,
+            drone_disk_half_width_deg=15.0,
         ),
     )
     base.update(overrides)
