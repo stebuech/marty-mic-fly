@@ -79,15 +79,21 @@ def execute_plan(plan: list[dict], scenario_paths: dict, *,
         scenario = spec["scenario"]
         sp = scenario_paths[scenario]
 
-        # Synth-on-demand only when scenario_paths gives explicit audio/gt paths
-        # (S1-S3). For S0 we use whatever the config already references.
+        # Synth-on-demand for non-S0 scenarios. Generates both the mixed
+        # (drone + ext) and ext_only files in one go so that D_ref stays
+        # consistent (same seed → same ext-signal → drone = mixed − ext).
         if "audio_h5" in sp and "ground_truth_h5" in sp:
-            ensure_scenario(
+            from analysis.separation_study.synth_scenarios import (
+                ensure_scenario_pair,
+            )
+            ensure_scenario_pair(
                 scenario=scenario,
                 base_drone_artifact=sp["drone_artifact"],
                 mic_geom_xml=sp["mic_geom_xml"],
-                out_synth_h5=Path(sp["audio_h5"]),
-                out_gt_h5=Path(sp["ground_truth_h5"]),
+                out_mixed_h5=Path(sp["audio_h5"]),
+                out_mixed_gt_h5=Path(sp["ground_truth_h5"]),
+                out_ext_only_h5=Path(sp["ext_only_audio_h5"]),
+                out_ext_only_gt_h5=Path(sp["ext_only_gt_h5"]),
             )
 
         cfg_path = Path(spec["config"])
@@ -96,6 +102,11 @@ def execute_plan(plan: list[dict], scenario_paths: dict, *,
                             if s.get("kind") == "array_filter")
 
         overrides = dict(spec["overrides"])
+        # scenario_paths can declare config_overrides that apply to ALL runs
+        # of the scenario (e.g., target_point_m for off-axis source).
+        # Sweep axes in `spec["overrides"]` take precedence.
+        for k, v in sp.get("config_overrides", {}).items():
+            overrides.setdefault(k, v)
         # Only override input paths when scenario_paths supplies them — otherwise
         # the config keeps its own audio_h5/ground_truth_h5 (per-config-correct
         # for S0 where ext_only-configs and mixed-configs use different files).
@@ -130,7 +141,8 @@ def execute_plan(plan: list[dict], scenario_paths: dict, *,
         # apples-to-apples with what the pipeline actually computed.
         af_stage = af_stage_cfg
         bands = af_stage["bands"]
-        target_point = tuple(af_stage["target_point_m"])
+        target_point = tuple(overrides.get(
+            "array_filter.target_point_m", af_stage["target_point_m"]))
         nperseg = int(overrides.get(nperseg_key, af_stage["csm"]["nperseg"]))
         noverlap = int(overrides.get(noverlap_key, af_stage["csm"]["noverlap"]))
         window = af_stage["csm"]["window"]

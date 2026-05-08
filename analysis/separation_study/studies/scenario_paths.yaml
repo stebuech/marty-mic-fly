@@ -18,23 +18,34 @@ S0:
 S1:
   drone_artifact: /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/drone_source_artifact_gaptip.h5
   mic_geom_xml:   /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/mic_geom.xml
-  audio_h5:       /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/scenario_S1_synth.h5
-  ground_truth_h5: /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/scenario_S1_synth_gt.h5
-  ext_only_gt_h5:  /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/scenario_S1_extonly_gt.h5
-  mixed_gt_h5:     /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/scenario_S1_synth_gt.h5
+  audio_h5:        /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/scenario_S1_mixed.h5
+  ground_truth_h5: /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/scenario_S1_mixed_gt.h5
+  ext_only_audio_h5: /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/scenario_S1_extonly.h5
+  ext_only_gt_h5:    /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/scenario_S1_extonly_gt.h5
+  mixed_gt_h5:       /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/scenario_S1_mixed_gt.h5
+  # Target moved laterally to (0.3, 0, -1.5); steering must follow.
+  config_overrides:
+    array_filter.target_point_m: [0.3, 0.0, -1.5]
 
 S2:
   drone_artifact: /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/drone_source_artifact_gaptip.h5
   mic_geom_xml:   /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/mic_geom.xml
-  audio_h5:       /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/scenario_S2_synth.h5
-  ground_truth_h5: /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/scenario_S2_synth_gt.h5
-  ext_only_gt_h5:  /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/scenario_S2_extonly_gt.h5
-  mixed_gt_h5:     /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/scenario_S2_synth_gt.h5
+  audio_h5:        /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/scenario_S2_mixed.h5
+  ground_truth_h5: /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/scenario_S2_mixed_gt.h5
+  ext_only_audio_h5: /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/scenario_S2_extonly.h5
+  ext_only_gt_h5:    /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/scenario_S2_extonly_gt.h5
+  mixed_gt_h5:       /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/scenario_S2_mixed_gt.h5
+  # Same position as S0, just quieter source amplitude. No config-overrides.
 
 S3:
   drone_artifact: /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/drone_source_artifact_gaptip.h5
   mic_geom_xml:   /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/mic_geom.xml
-  audio_h5:       /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/scenario_S3_synth.h5
-  ground_truth_h5: /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/scenario_S3_synth_gt.h5
-  ext_only_gt_h5:  /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/scenario_S3_extonly_gt.h5
-  mixed_gt_h5:     /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/scenario_S3_synth_gt.h5
+  audio_h5:        /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/scenario_S3_mixed.h5
+  ground_truth_h5: /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/scenario_S3_mixed_gt.h5
+  ext_only_audio_h5: /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/scenario_S3_extonly.h5
+  ext_only_gt_h5:    /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/scenario_S3_extonly_gt.h5
+  mixed_gt_h5:       /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/scenario_S3_mixed_gt.h5
+  # Target at (0, 0, -3.0); steering and focal sphere must follow.
+  config_overrides:
+    array_filter.target_point_m: [0.0, 0.0, -3.0]
+    array_filter.doa_grid.focal_radius_m: 3.0

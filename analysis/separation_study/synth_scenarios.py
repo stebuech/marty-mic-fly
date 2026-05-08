@@ -98,3 +98,47 @@ def ensure_scenario(
     if cfg is None:
         return
     _run_compose(cfg)
+
+
+def ensure_scenario_pair(
+    *,
+    scenario: str,
+    base_drone_artifact: str,
+    mic_geom_xml: str,
+    out_mixed_h5: Path,
+    out_mixed_gt_h5: Path,
+    out_ext_only_h5: Path,
+    out_ext_only_gt_h5: Path,
+    seed: int = 0,
+) -> None:
+    """Generiert mixed (drone + ext) und ext_only (ext only) für ein Szenario.
+
+    Beide compose-Läufe nutzen denselben seed → identisches ext-Signal in
+    beiden Files → drone_only_at_array = mixed_audio − ext_only_audio gibt
+    exakt das drone-Signal zurück."""
+    # Mixed (with drone)
+    if not (Path(out_mixed_h5).exists() and Path(out_mixed_gt_h5).exists()):
+        cfg_m = make_compose_config(
+            scenario=scenario,
+            base_drone_artifact=base_drone_artifact,
+            mic_geom_xml=mic_geom_xml,
+            out_synth_h5=str(out_mixed_h5),
+            out_gt_h5=str(out_mixed_gt_h5),
+            seed=seed,
+        )
+        if cfg_m is not None:
+            _run_compose(cfg_m)
+
+    # Ext-only (no drone)
+    if not (Path(out_ext_only_h5).exists() and Path(out_ext_only_gt_h5).exists()):
+        cfg_e = make_compose_config(
+            scenario=scenario,
+            base_drone_artifact=base_drone_artifact,
+            mic_geom_xml=mic_geom_xml,
+            out_synth_h5=str(out_ext_only_h5),
+            out_gt_h5=str(out_ext_only_gt_h5),
+            seed=seed,
+        )
+        if cfg_e is not None:
+            cfg_e["include_drone"] = False
+            _run_compose(cfg_e)
