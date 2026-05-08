@@ -78,21 +78,30 @@ def execute_plan(plan: list[dict], scenario_paths: dict, *,
 
         scenario = spec["scenario"]
         sp = scenario_paths[scenario]
-        ensure_scenario(
-            scenario=scenario,
-            base_drone_artifact=sp["drone_artifact"],
-            mic_geom_xml=sp["mic_geom_xml"],
-            out_synth_h5=Path(sp["audio_h5"]),
-            out_gt_h5=Path(sp["ground_truth_h5"]),
-        )
+
+        # Synth-on-demand only when scenario_paths gives explicit audio/gt paths
+        # (S1-S3). For S0 we use whatever the config already references.
+        if "audio_h5" in sp and "ground_truth_h5" in sp:
+            ensure_scenario(
+                scenario=scenario,
+                base_drone_artifact=sp["drone_artifact"],
+                mic_geom_xml=sp["mic_geom_xml"],
+                out_synth_h5=Path(sp["audio_h5"]),
+                out_gt_h5=Path(sp["ground_truth_h5"]),
+            )
 
         cfg_path = Path(spec["config"])
         overrides = dict(spec["overrides"])
-        overrides.setdefault("input.audio_h5", sp["audio_h5"])
-        overrides.setdefault("input.ground_truth_h5", sp["ground_truth_h5"])
+        # Only override input paths when scenario_paths supplies them — otherwise
+        # the config keeps its own audio_h5/ground_truth_h5 (per-config-correct
+        # for S0 where ext_only-configs and mixed-configs use different files).
+        if "audio_h5" in sp:
+            overrides.setdefault("input.audio_h5", sp["audio_h5"])
+        if "ground_truth_h5" in sp:
+            overrides.setdefault("input.ground_truth_h5", sp["ground_truth_h5"])
 
         log.info("run %s overrides=%s", spec["run_id"], overrides)
-        run_pipeline_with_overrides(
+        actual_run_dir = run_pipeline_with_overrides(
             base_config_path=cfg_path,
             overrides=overrides,
             output_dir=run_dir,
@@ -109,15 +118,15 @@ def execute_plan(plan: list[dict], scenario_paths: dict, *,
         mic_positions = load_mic_geom_xml(sp["mic_geom_xml"])
 
         ext_gt = Path(sp["ext_only_gt_h5"])
-        mixed_gt = Path(sp["ground_truth_h5"])
+        mixed_gt = Path(sp["mixed_gt_h5"])
         augment_metrics(
-            run_dir=run_dir, ext_gt_h5=ext_gt, mixed_gt_h5=mixed_gt,
+            run_dir=actual_run_dir, ext_gt_h5=ext_gt, mixed_gt_h5=mixed_gt,
             bands=bands, mic_positions=mic_positions, target_point=target_point,
             welch_nperseg=nperseg, welch_noverlap=noverlap, window=window,
             welch_floor_db=-50.0,
         )
 
-        (run_dir / "run_meta.json").write_text(json.dumps({
+        (actual_run_dir / "run_meta.json").write_text(json.dumps({
             "run_id": spec["run_id"],
             "config": spec["config"],
             "scenario": spec["scenario"],
@@ -125,7 +134,8 @@ def execute_plan(plan: list[dict], scenario_paths: dict, *,
             "method": Path(spec["config"]).stem,
         }, indent=2))
 
-        results.append({**spec, "status": "ok"})
+        results.append({**spec, "status": "ok",
+                        "actual_run_dir": str(actual_run_dir)})
     return results
 
 

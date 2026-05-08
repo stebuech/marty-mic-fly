@@ -1,0 +1,38 @@
+# Scenario-paths mapping for separation study runs.
+#
+# For S0 (baseline): no audio_h5/ground_truth_h5 keys → configs use their own
+# input paths (ext_only-configs and mixed-configs reference different audios
+# in their respective YAMLs). Only ext_only_gt_h5 and mixed_gt_h5 are needed
+# for metric augmentation.
+#
+# For S1-S3 (synth-on-demand): audio_h5 and ground_truth_h5 are explicit, and
+# ensure_scenario will compose them via martymicfly.synth.cli.compose if absent.
+S0:
+  drone_artifact: /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/drone_source_artifact_gaptip.h5
+  mic_geom_xml:   /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/mic_geom.xml
+  ext_only_gt_h5: /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/ap2a_synth_external_only_gaptip_gt.h5
+  mixed_gt_h5:    /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/ap2a_synth_mixed_gaptip_gt.h5
+
+S1:
+  drone_artifact: /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/drone_source_artifact_gaptip.h5
+  mic_geom_xml:   /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/mic_geom.xml
+  audio_h5:       /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/scenario_S1_synth.h5
+  ground_truth_h5: /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/scenario_S1_synth_gt.h5
+  ext_only_gt_h5:  /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/scenario_S1_extonly_gt.h5
+  mixed_gt_h5:     /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/scenario_S1_synth_gt.h5
+
+S2:
+  drone_artifact: /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/drone_source_artifact_gaptip.h5
+  mic_geom_xml:   /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/mic_geom.xml
+  audio_h5:       /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/scenario_S2_synth.h5
+  ground_truth_h5: /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/scenario_S2_synth_gt.h5
+  ext_only_gt_h5:  /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/scenario_S2_extonly_gt.h5
+  mixed_gt_h5:     /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/scenario_S2_synth_gt.h5
+
+S3:
+  drone_artifact: /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/drone_source_artifact_gaptip.h5
+  mic_geom_xml:   /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/mic_geom.xml
+  audio_h5:       /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/scenario_S3_synth.h5
+  ground_truth_h5: /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/scenario_S3_synth_gt.h5
+  ext_only_gt_h5:  /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/scenario_S3_extonly_gt.h5
+  mixed_gt_h5:     /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/scenario_S3_synth_gt.h5

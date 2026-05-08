@@ -68,11 +68,16 @@ def run_pipeline_with_overrides(
     log_level: str = "INFO",
 ) -> Path:
     """Patcht base_config mit overrides, schreibt temp-yaml, ruft run_pipeline.
-    Liefert das resultierende run_dir Pfad."""
+
+    Die CLI-Pipeline nestet ihre Outputs unter <output_dir>/<auto_run_id>/.
+    Der Wrapper findet das tatsächliche run_dir nach Subprocess-Ende und gibt
+    es zurück (das ist der Pfad, in dem residual_csm.h5 etc. liegen).
+    """
     base_cfg = yaml.safe_load(base_config_path.read_text())
     cfg = apply_overrides(base_cfg, overrides)
     cfg["output"]["dir"] = str(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    before = {p for p in output_dir.iterdir() if p.is_dir()}
     with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as tmp:
         yaml.safe_dump(cfg, tmp)
         tmp_path = tmp.name
@@ -82,4 +87,13 @@ def run_pipeline_with_overrides(
          "--log-level", log_level],
         check=True,
     )
-    return output_dir
+    after = {p for p in output_dir.iterdir() if p.is_dir()}
+    new_dirs = sorted(after - before)
+    if not new_dirs:
+        # Pipeline wrote directly into output_dir (no nested run_id dir)
+        return output_dir
+    if len(new_dirs) > 1:
+        raise RuntimeError(
+            f"expected single new run dir under {output_dir}, got {new_dirs}"
+        )
+    return new_dirs[0]
