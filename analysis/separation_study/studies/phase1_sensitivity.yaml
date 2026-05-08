@@ -1,6 +1,6 @@
 phase: phase1
 output_root: results/separation_study/phase1_sensitivity
-scenarios: [S0, S1, S2, S3]
+scenarios: [S0]   # S1-S3 require synth-on-demand validation, deferred
 axes:
   array_filter.csm.nperseg: [256, 1024]
   array_filter.csm.diag_loading_rel: [0.0, 1.0e-4]
