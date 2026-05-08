@@ -48,10 +48,16 @@ def _drone_only_psd_at_target(
     csm_diag_loading: float,
     f_min_hz: float,
     f_max_hz: float,
+    segment_duration_s: float = 10.0,
+    segment_mode: str = "middle",
 ) -> tuple[np.ndarray, np.ndarray]:
     """Build drone-only mic-array audio via mixed - ext subtraction, then CSM,
     then steer_to_psd at target. Returns (frequencies, psd_d_ref) where
-    psd_d_ref includes the range_compensation_factor."""
+    psd_d_ref includes the range_compensation_factor.
+
+    Uses the same segment (default: middle 10s) as the pipeline run, otherwise
+    the CSM is built over much more data than the residual_csm and the
+    comparison becomes apples-to-oranges (and slow)."""
     from martymicfly.io.synth_h5 import load_synth_h5
     from martymicfly.processing.csm import CsmConfig, build_measurement_csm
     from martymicfly.processing.steering import (
@@ -63,8 +69,20 @@ def _drone_only_psd_at_target(
     fs = float(ext_src["sample_rate"])
     if fs != float(mix_src["sample_rate"]):
         raise ValueError("sample_rate mismatch ext_only vs mixed audio")
-    drone_audio = (mix_src["time_data"].astype(np.float64)
-                   - ext_src["time_data"].astype(np.float64))
+    n_total = ext_src["time_data"].shape[0]
+    n_seg = int(round(segment_duration_s * fs))
+    if n_seg > n_total:
+        raise ValueError(f"segment {segment_duration_s}s > recording {n_total/fs:.2f}s")
+    if segment_mode == "head":
+        start = 0
+    elif segment_mode == "tail":
+        start = n_total - n_seg
+    else:  # middle (default)
+        start = (n_total - n_seg) // 2
+    end = start + n_seg
+    ext_seg = ext_src["time_data"][start:end].astype(np.float64)
+    mix_seg = mix_src["time_data"][start:end].astype(np.float64)
+    drone_audio = mix_seg - ext_seg
     cfg = CsmConfig(
         nperseg=csm_nperseg, noverlap=csm_noverlap, window=csm_window,
         diag_loading_rel=csm_diag_loading,
@@ -92,6 +110,8 @@ def augment_metrics(
     csm_diag_loading: float = 0.0,
     f_min_hz: float = 0.0,
     f_max_hz: float = 1.0e9,
+    segment_duration_s: float = 10.0,
+    segment_mode: str = "middle",
 ) -> dict:
     psd_post, freqs = _load_psd_post_from_run(run_dir, mic_positions, target_point)
     freqs_d, psd_d_ref = _drone_only_psd_at_target(
@@ -101,6 +121,7 @@ def augment_metrics(
         csm_nperseg=welch_nperseg, csm_noverlap=welch_noverlap,
         csm_window=window, csm_diag_loading=csm_diag_loading,
         f_min_hz=f_min_hz, f_max_hz=f_max_hz,
+        segment_duration_s=segment_duration_s, segment_mode=segment_mode,
     )
     if not np.allclose(freqs, freqs_d):
         # Different freq grids — interpolate d_ref onto post grid

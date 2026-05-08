@@ -121,6 +121,9 @@ def execute_plan(plan: list[dict], scenario_paths: dict, *,
         diag = float(af_stage["csm"].get("diag_loading_rel", 0.0))
         f_min = float(af_stage["csm"].get("f_min_hz", 0.0))
         f_max = float(af_stage["csm"].get("f_max_hz", 1.0e9))
+        full_cfg = yaml.safe_load(cfg_path.read_text())
+        seg_duration = float(full_cfg.get("segment", {}).get("duration", 10.0))
+        seg_mode = str(full_cfg.get("segment", {}).get("mode", "middle"))
         mic_positions = load_mic_geom_xml(sp["mic_geom_xml"])
 
         ext_gt = Path(sp["ext_only_gt_h5"])
@@ -135,6 +138,7 @@ def execute_plan(plan: list[dict], scenario_paths: dict, *,
             welch_nperseg=nperseg, welch_noverlap=noverlap, window=window,
             welch_floor_db=-50.0,
             csm_diag_loading=diag, f_min_hz=f_min, f_max_hz=f_max,
+            segment_duration_s=seg_duration, segment_mode=seg_mode,
         )
 
         (actual_run_dir / "run_meta.json").write_text(json.dumps({
