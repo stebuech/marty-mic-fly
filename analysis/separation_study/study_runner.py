@@ -158,7 +158,9 @@ def execute_plan(plan: list[dict], scenario_paths: dict, *,
         # Drone-only D_ref is built by subtracting ext-only mic-array audio
         # from mixed mic-array audio at the array level, then steering.
         ext_only_audio = Path(sp["ext_only_audio_h5"])
-        mixed_audio = Path(sp["mixed_audio_h5"])
+        # Mixed audio path: prefer mixed_audio_h5 (S0), fall back to audio_h5
+        # (S1-S3 where the synth-on-demand uses audio_h5 = mixed file).
+        mixed_audio = Path(sp.get("mixed_audio_h5") or sp["audio_h5"])
         augment_metrics(
             run_dir=actual_run_dir, ext_gt_h5=ext_gt,
             ext_only_audio_h5=ext_only_audio, mixed_audio_h5=mixed_audio,
