@@ -16,7 +16,7 @@ def test_spectrum_l1_db_no_compensation():
     from analysis.separation_study.metric_extensions import (
         decompose_residual, band_metrics,
     )
-    psd_post = np.array([2.0, 0.5, 2.0, 0.5])
+    psd_post = np.array([2.0, 0.0, 2.0, 0.0])
     ext_gt   = np.array([1.0, 1.0, 1.0, 1.0])
     delta_f = 1.0
     m = band_metrics(psd_post, ext_gt, d_ref=np.ones(4), delta_f=delta_f)

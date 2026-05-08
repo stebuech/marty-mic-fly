@@ -47,11 +47,7 @@ def band_metrics(
     p_post = float(psd_post.sum() * delta_f)
     d_unflt = float(d_ref.sum() * delta_f)
 
-    # Normalise L1 by the dominant component (max of excess vs deficit) so that
-    # a symmetric over/under-subtraction reads as > 0 dB (factor 2 = +3 dB) and
-    # a pure one-sided subtraction reads as 0 dB.  Returns -inf when both are 0.
-    _l1_max = max(e_excess, e_deficit)
-    spectrum_l1_db = _db((e_excess + e_deficit) / _l1_max) if _l1_max > 0 else float("-inf")
+    spectrum_l1_db = _db((e_excess + e_deficit) / e_gt) if e_gt > 0 else float("-inf")
     over_subtraction_db = _db(e_deficit / e_gt) if e_gt > 0 else float("-inf")
     drone_leakage_db_def1 = _db(p_post / d_unflt) if d_unflt > 0 else float("inf")
     drone_leakage_db_def2 = _db(e_excess / d_unflt) if d_unflt > 0 else float("inf")
