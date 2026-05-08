@@ -1,0 +1,19 @@
+phase: phase1
+output_root: results/separation_study/phase1_sensitivity
+scenarios: [S0, S1, S2, S3]
+axes:
+  array_filter.csm.nperseg: [256, 1024]
+  array_filter.csm.diag_loading_rel: [0.0, 1.0e-4]
+  array_filter.doa_grid.rotor_cone_half_angle_deg: [20.0, 45.0]
+  array_filter.doa_grid.drone_disk_half_width_deg: [8.0, 25.0]
+  array_filter.doa_grid.target_cone_half_angle_deg: [30.0, 60.0]
+  array_filter.doa_grid.focal_radius_m: [1.0, 2.0]
+  array_filter.doa_grid.azimuth_step_deg: [3.0, 10.0]
+  array_filter.doa_grid.elevation_step_deg: [3.0, 10.0]
+  array_filter.clean_sc.damp: [0.3, 0.9]
+  array_filter.clean_sc.n_iter: [50, 300]
+  array_filter.clean_sc.r_diag: [false]
+configs:
+  - configs/pipeline_mixed_doa_rotor_cone.yaml
+  - configs/pipeline_mixed_doa_drone_cone.yaml
+  - configs/pipeline_mixed_doa_target_cone.yaml
