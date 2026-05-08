@@ -27,7 +27,9 @@ def _load_psd_post_from_run(
     )
     csm_path = run_dir / "residual_csm.h5"
     with h5py.File(csm_path, "r") as f:
-        csm = np.asarray(f["csm"][:], dtype=np.complex128)
+        csm_real = np.asarray(f["csm_real"][:], dtype=np.float64)
+        csm_imag = np.asarray(f["csm_imag"][:], dtype=np.float64)
+        csm = (csm_real + 1j * csm_imag).astype(np.complex128)
         freqs = np.asarray(f["frequencies"][:], dtype=np.float64)
     psd_post = steer_to_psd(csm, freqs, mic_positions, target_point)
     cal = range_compensation_factor(mic_positions, target_point)
