@@ -45,6 +45,15 @@ HIRES_NPERSEG = 8192
 HIRES_NOVERLAP = 4096
 F_MIN_HZ = 50.0
 
+# MAE bands (match the standard study bands; "very_low" added to cover the
+# 50-200 Hz extension that is below the default low band).
+MAE_BANDS = {
+    "very_low (50-200 Hz)": (50.0, 200.0),
+    "low (200-500 Hz)":     (200.0, 500.0),
+    "mid (500-2000 Hz)":    (500.0, 2000.0),
+    "high (2-6 kHz)":       (2000.0, 6000.0),
+}
+
 
 def _scenario_inputs(sp_yaml: Path) -> dict:
     sp = yaml.safe_load(sp_yaml.read_text())
@@ -144,10 +153,15 @@ def main(argv: list[str] | None = None) -> int:
         run_dirs[sname] = _run(sname, Path(BASE_CFG), s, args.out_dir)
 
     fig = make_subplots(
-        rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.08,
+        rows=3, cols=1,
+        row_heights=[0.42, 0.42, 0.16],
+        shared_xaxes=False, vertical_spacing=0.08,
+        specs=[[{"type": "xy"}], [{"type": "xy"}], [{"type": "table"}]],
         subplot_titles=("PSD: post (solid) vs ground truth (dashed)",
-                        "PSD error: 10·log10(post / GT) [dB]"),
+                        "PSD error: 10·log10(post / GT) [dB]",
+                        "MAE per band [dB]"),
     )
+    mae_rows: list[list] = []
     for sname, s in scenarios.items():
         freqs, post = _post_psd_from_run(
             run_dirs[sname], s["target_point_m"], Path(s["mic_geom_xml"]),
@@ -156,36 +170,73 @@ def main(argv: list[str] | None = None) -> int:
         mask = freqs >= F_MIN_HZ
         x = freqs[mask]
         color = SCENARIO_COLORS[sname]
+        post_db = 10 * np.log10(np.maximum(post[mask], 1e-30))
+        gt_db = 10 * np.log10(np.maximum(gt[mask], 1e-30))
+        err_db = post_db - gt_db
+
         # Top: absolute PSDs (post + GT)
         fig.add_trace(go.Scatter(
-            x=x, y=10 * np.log10(np.maximum(post[mask], 1e-30)),
-            mode="lines", name=f"{sname} post", legendgroup=sname,
+            x=x, y=post_db, mode="lines",
+            name=f"{sname} post", legendgroup=sname,
             line=dict(color=color, width=1.5),
         ), row=1, col=1)
         fig.add_trace(go.Scatter(
-            x=x, y=10 * np.log10(np.maximum(gt[mask], 1e-30)),
-            mode="lines", name=f"{sname} GT", legendgroup=sname,
+            x=x, y=gt_db, mode="lines",
+            name=f"{sname} GT", legendgroup=sname,
             line=dict(color=color, width=1.0, dash="dash"),
         ), row=1, col=1)
-        # Bottom: error
-        err_db = (10 * np.log10(np.maximum(post[mask], 1e-30))
-                  - 10 * np.log10(np.maximum(gt[mask], 1e-30)))
+        # Middle: error
         fig.add_trace(go.Scatter(
             x=x, y=err_db, mode="lines", name=f"{sname} err",
             legendgroup=sname, showlegend=False,
             line=dict(color=color, width=1.5),
         ), row=2, col=1)
 
+        # MAE per band on the masked frequency axis
+        mae_per_band = []
+        for _, (f_lo, f_hi) in MAE_BANDS.items():
+            band_mask = (x >= f_lo) & (x <= f_hi)
+            mae_per_band.append(
+                float(np.mean(np.abs(err_db[band_mask])))
+                if band_mask.any() else float("nan")
+            )
+        mae_rows.append([sname, *mae_per_band])
+
     fig.add_hline(y=0, line=dict(color="#444", width=1, dash="dash"),
                   row=2, col=1)
-    fig.update_xaxes(type="log", range=[np.log10(F_MIN_HZ), np.log10(6000)])
-    fig.update_xaxes(title_text="Frequency [Hz]", row=2, col=1)
+    fig.update_xaxes(type="log", range=[np.log10(F_MIN_HZ), np.log10(6000)],
+                     row=1, col=1)
+    fig.update_xaxes(type="log", range=[np.log10(F_MIN_HZ), np.log10(6000)],
+                     row=2, col=1, title_text="Frequency [Hz]")
     fig.update_yaxes(title_text="PSD [dB]", row=1, col=1)
     fig.update_yaxes(title_text="error [dB]", row=2, col=1)
+
+    # MAE table
+    header = ["scenario", *MAE_BANDS.keys()]
+    cols_t = list(zip(*mae_rows))
+    cell_colors = [
+        [SCENARIO_COLORS[r[0]] for r in mae_rows],   # color column = scenario col
+        *[["#f6f6f6"] * len(mae_rows) for _ in range(len(MAE_BANDS))],
+    ]
+    fig.add_trace(go.Table(
+        header=dict(values=header, fill_color="#dddddd",
+                    font=dict(size=12), align="center"),
+        cells=dict(
+            values=[
+                cols_t[0],
+                *[[f"{v:.2f}" for v in col] for col in cols_t[1:]],
+            ],
+            fill_color=cell_colors,
+            font=dict(color=[["white"] * len(mae_rows)]
+                     + [["#222"] * len(mae_rows)] * len(MAE_BANDS)),
+            align="center", height=24,
+        ),
+    ), row=3, col=1)
+
     fig.update_layout(
         title=(f"ext_only drone_cone — S0/S1/S2/S3 (nperseg={HIRES_NPERSEG}, "
                f"Δf≈{51200/HIRES_NPERSEG:.2f} Hz)"),
-        height=900, width=1100, hovermode="x unified",
+        height=1050, width=1100, hovermode="x unified",
     )
     out_html = args.out_dir / "drone_cone_psd_error.html"
     fig.write_html(out_html, include_plotlyjs="cdn")
