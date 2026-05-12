@@ -1,12 +1,12 @@
-"""ext_only drone_cone PSD-Error-zu-GT Plot über S0/S1/S2/S3.
+"""ext_only drone_cone PSD + PSD-Error-zu-GT Plot über S0/S1/S2/S3.
 
 Fährt drone_cone × 4 Szenarien mit höherer CSM-Auflösung (nperseg=8192 →
-Δf ≈ 6.25 Hz statt 100 Hz) und f_min=50 Hz, und plottet
-``10·log10(post) − 10·log10(gt)`` pro Szenario als überlagerte Linien
-in einem einzelnen Plotly-Plot.
+Δf ≈ 6.25 Hz statt 100 Hz) und f_min=50 Hz. Erzeugt einen 2-row-Plot:
+  - oben: absolute PSD-Kurven (post solid, GT dashed) pro Szenario
+  - unten: 10·log10(post / GT) pro Szenario
 
-Positive Werte = Pipeline überschätzt PSD (Restenergie aus Side-Lobes etc.),
-negative Werte = Über-Subtraktion oder Range-Calibration-Drift.
+Positive Error-Werte = Pipeline überschätzt PSD (Restenergie aus Side-Lobes
+etc.), negative Werte = Über-Subtraktion oder Range-Calibration-Drift.
 """
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ import h5py
 import numpy as np
 import plotly.graph_objects as go
 import yaml
+from plotly.subplots import make_subplots
 from scipy.signal import welch
 
 from analysis.separation_study.pipeline_wrapper import run_pipeline_with_overrides
@@ -142,28 +143,49 @@ def main(argv: list[str] | None = None) -> int:
         _ensure_synth(s)
         run_dirs[sname] = _run(sname, Path(BASE_CFG), s, args.out_dir)
 
-    fig = go.Figure()
+    fig = make_subplots(
+        rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.08,
+        subplot_titles=("PSD: post (solid) vs ground truth (dashed)",
+                        "PSD error: 10·log10(post / GT) [dB]"),
+    )
     for sname, s in scenarios.items():
         freqs, post = _post_psd_from_run(
             run_dirs[sname], s["target_point_m"], Path(s["mic_geom_xml"]),
         )
         gt = _gt_psd_on_grid(Path(s["ext_only_gt_h5"]), freqs)
-        err_db = (10 * np.log10(np.maximum(post, 1e-30))
-                  - 10 * np.log10(np.maximum(gt, 1e-30)))
         mask = freqs >= F_MIN_HZ
+        x = freqs[mask]
+        color = SCENARIO_COLORS[sname]
+        # Top: absolute PSDs (post + GT)
         fig.add_trace(go.Scatter(
-            x=freqs[mask], y=err_db[mask], mode="lines", name=sname,
-            line=dict(color=SCENARIO_COLORS[sname], width=1.5),
-        ))
+            x=x, y=10 * np.log10(np.maximum(post[mask], 1e-30)),
+            mode="lines", name=f"{sname} post", legendgroup=sname,
+            line=dict(color=color, width=1.5),
+        ), row=1, col=1)
+        fig.add_trace(go.Scatter(
+            x=x, y=10 * np.log10(np.maximum(gt[mask], 1e-30)),
+            mode="lines", name=f"{sname} GT", legendgroup=sname,
+            line=dict(color=color, width=1.0, dash="dash"),
+        ), row=1, col=1)
+        # Bottom: error
+        err_db = (10 * np.log10(np.maximum(post[mask], 1e-30))
+                  - 10 * np.log10(np.maximum(gt[mask], 1e-30)))
+        fig.add_trace(go.Scatter(
+            x=x, y=err_db, mode="lines", name=f"{sname} err",
+            legendgroup=sname, showlegend=False,
+            line=dict(color=color, width=1.5),
+        ), row=2, col=1)
 
-    fig.add_hline(y=0, line=dict(color="#444", width=1, dash="dash"))
-    fig.update_xaxes(title_text="Frequency [Hz]", type="log",
-                     range=[np.log10(F_MIN_HZ), np.log10(6000)])
-    fig.update_yaxes(title_text="PSD error: 10·log10(post / GT) [dB]")
+    fig.add_hline(y=0, line=dict(color="#444", width=1, dash="dash"),
+                  row=2, col=1)
+    fig.update_xaxes(type="log", range=[np.log10(F_MIN_HZ), np.log10(6000)])
+    fig.update_xaxes(title_text="Frequency [Hz]", row=2, col=1)
+    fig.update_yaxes(title_text="PSD [dB]", row=1, col=1)
+    fig.update_yaxes(title_text="error [dB]", row=2, col=1)
     fig.update_layout(
-        title=(f"ext_only drone_cone — PSD error vs GT (nperseg={HIRES_NPERSEG}, "
+        title=(f"ext_only drone_cone — S0/S1/S2/S3 (nperseg={HIRES_NPERSEG}, "
                f"Δf≈{51200/HIRES_NPERSEG:.2f} Hz)"),
-        height=600, width=1100, hovermode="x unified",
+        height=900, width=1100, hovermode="x unified",
     )
     out_html = args.out_dir / "drone_cone_psd_error.html"
     fig.write_html(out_html, include_plotlyjs="cdn")
