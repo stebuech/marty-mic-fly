@@ -380,8 +380,14 @@ def _emit_array_filter_outputs(
         gt_psd_interp = np.interp(af["frequencies"], gt_f, gt_psd)
         gt_block = {"psd_at_target": gt_psd_interp, "frequencies": af["frequencies"]}
 
+    # Match the compensation applied inside compute_array_metrics so the plot
+    # is in proper source-PSD units (same axis as ground_truth). Without this
+    # psd_pre/post sit ~26 dB below GT (1/(4π·r) propagation factor squared).
+    from martymicfly.processing.steering import range_compensation_factor as _rcf
+    _cal = _rcf(ctx.mic_positions, tuple(stage_cfg.target_point_m))
     plot_target_psd(
-        af["frequencies"], af["target_psd_pre"], af["target_psd_post"],
+        af["frequencies"],
+        af["target_psd_pre"] * _cal, af["target_psd_post"] * _cal,
         gt_psd=(gt_block["psd_at_target"] if gt_block else None),
         bpfs=bpfs, out_path=str(out_dir / "target_psd.html"),
     )
