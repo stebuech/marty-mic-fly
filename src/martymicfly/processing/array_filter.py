@@ -92,6 +92,26 @@ def integrate_band_maps(
     return out
 
 
+def _psd_project(csm: np.ndarray) -> np.ndarray:
+    """Project each (M, M) slice onto the PSD cone via eigenvalue clipping.
+
+    The CSM subtraction ``csm - drone_csm`` can produce locally indefinite
+    residuals when the synthesized ``drone_csm`` overshoots in some
+    eigendirection at a given frequency (trace-matching preserves total
+    energy but not eigenvalue ordering). Clipping negative eigenvalues to
+    zero restores PSD without changing the eigenvectors, and only touches
+    bins where the synthesis already overshot.
+    """
+    n_f = csm.shape[0]
+    out = np.empty_like(csm)
+    for fi in range(n_f):
+        H = 0.5 * (csm[fi] + csm[fi].conj().T)
+        w, V = np.linalg.eigh(H)
+        w = np.maximum(w, 0.0)
+        out[fi] = (V * w) @ V.conj().T
+    return out
+
+
 def integrate_csm_band_maps_from_residual(
     *args, **kwargs,
 ) -> dict[str, np.ndarray]:
@@ -215,7 +235,7 @@ class ArrayFilterStage:
         drone_csm = reconstruct_csm(
             source_map.subset(masks.active), ctx.mic_positions,
         )
-        residual_csm = csm - drone_csm
+        residual_csm = _psd_project(csm - drone_csm)
 
         beam_maps = integrate_band_maps(
             source_map, self.cfg.bands, fit_input.reshape_hint,
