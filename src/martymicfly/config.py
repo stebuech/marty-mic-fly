@@ -155,7 +155,7 @@ class DoaGridConfig(BaseModel):
 
     When this config is present on ArrayFilterStageConfig, the stage
     factory dispatches to DoaArrayFilterStage; mask_mode must then be
-    one of the cone variants (rotor_cone, target_cone, drone_cone).
+    one of the cone variants (rotor_cone, target_cone, drone_disk).
     """
     model_config = ConfigDict(extra="forbid")
     focal_radius_m: float = Field(default=1.5, gt=0.0)
@@ -164,10 +164,10 @@ class DoaGridConfig(BaseModel):
     hemisphere: Literal["lower", "upper", "full"] = "lower"
     rotor_cone_half_angle_deg: float = Field(default=30.0, gt=0.0, le=180.0)
     target_cone_half_angle_deg: float = Field(default=30.0, gt=0.0, le=180.0)
-    # drone_cone is now a "drone disk": an equatorial belt around the rotor
-    # plane, built as the complement of two ±z cones with large opening
-    # angles. This parameter is the half-width of the belt in degrees of
-    # elevation off the rotor plane (so 15° → ±15° band).
+    # drone_disk is an equatorial belt around the rotor plane, built as
+    # the complement of two ±z cones with large opening angles. This
+    # parameter is the half-width of the belt in degrees of elevation
+    # off the rotor plane (so 15° → ±15° band).
     drone_disk_half_width_deg: float = Field(default=15.0, gt=0.0, le=90.0)
 
 
@@ -216,7 +216,7 @@ class ArrayFilterStageConfig(BaseModel):
     #     in the drone vicinity.
     mask_mode: Literal[
         "target_box", "rotor_disc", "drone_box",
-        "rotor_cone", "target_cone", "drone_cone",
+        "rotor_cone", "target_cone", "drone_disk",
     ] = "target_box"
     target_box_half_extent_m: tuple[float, float, float] = (0.15, 0.15, 0.15)
     drone_box_center_m: tuple[float, float, float] = (0.0, 0.0, 0.0)

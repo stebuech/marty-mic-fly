@@ -602,7 +602,7 @@ def build_mask_geometry_3d_fig(
             color="#ff7f0e", opacity=0.30,
             name=f"rotor_cone[{i}]" if M > 1 else "rotor_cone",
         ))
-    # drone_cone is the equatorial belt around the rotor plane — visualize
+    # drone_disk is the equatorial belt around the rotor plane — visualize
     # both the disk band (kept) and the two ±z exclusion cones (rejected).
     cone_half = max(0.0, 90.0 - float(drone_disk_half_width_deg))
     for sign, label in ((1.0, "+z"), (-1.0, "-z")):
@@ -617,7 +617,7 @@ def build_mask_geometry_3d_fig(
         radius=doa_focal_radius_m,
         half_width_deg=float(drone_disk_half_width_deg),
         color="#d62728", opacity=0.25,
-        name="drone_cone (disk)",
+        name="drone_disk",
     ))
     target_dir = target if float(np.linalg.norm(target)) > 1e-9 else np.array([0.0, 0.0, -1.0])
     fig.add_trace(_cone_surface(

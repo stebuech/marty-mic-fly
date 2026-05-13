@@ -35,13 +35,13 @@ log = logging.getLogger("ext_only_robustness")
 
 CONFIGS = {
     "rotor_cone":  "configs/pipeline_external_only_doa_rotor_cone.yaml",
-    "drone_cone":  "configs/pipeline_external_only_doa_drone_cone.yaml",
+    "drone_disk":  "configs/pipeline_external_only_doa_drone_disk.yaml",
     "target_cone": "configs/pipeline_external_only_doa_target_cone.yaml",
 }
 
 METHOD_COLORS = {
     "rotor_cone":  "#d62728",   # red
-    "drone_cone":  "#9467bd",   # purple
+    "drone_disk":  "#9467bd",   # purple
     "target_cone": "#ff7f0e",   # orange
 }
 
@@ -205,7 +205,7 @@ def main(argv: list[str] | None = None) -> int:
             line=dict(color="#999999", width=1),
             legendgroup="pre", showlegend=(row == 1),
         ), row=row, col=1)
-        for method in ("rotor_cone", "drone_cone", "target_cone"):
+        for method in ("rotor_cone", "drone_disk", "target_cone"):
             _, _, post, _ = curves[(method, sname)]
             fig.add_trace(go.Scatter(
                 x=freqs, y=10 * np.log10(np.maximum(post, 1e-30)),

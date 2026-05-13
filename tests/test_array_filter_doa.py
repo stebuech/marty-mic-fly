@@ -80,7 +80,7 @@ def test_doa_stage_e2e_target_cone_runs():
     assert af["target_psd_post"].sum() >= 0.0
 
     # DOA-specific masks present + cartesian aliases populated
-    for k in ("rotor_cone_mask", "target_cone_mask", "drone_cone_mask",
+    for k in ("rotor_cone_mask", "target_cone_mask", "drone_disk_mask",
               "rotor_disc_mask", "target_box_mask", "drone_box_mask"):
         assert k in af and af[k].dtype == bool
 
@@ -125,10 +125,10 @@ def test_doa_stage_three_mask_modes_yield_distinct_residuals():
 
     af_t = run("target_cone")
     af_r = run("rotor_cone")
-    af_d = run("drone_cone")
+    af_d = run("drone_disk")
 
     assert not np.allclose(af_t["residual_csm"], af_r["residual_csm"])
     assert not np.allclose(af_t["residual_csm"], af_d["residual_csm"])
-    # rotor_cone vs drone_cone may coincide if the rotor positions and
+    # rotor_cone vs drone_disk may coincide if the rotor positions and
     # cone half-angles produce the same cones; tolerate that case but
     # require *some* mode pair to differ (already established above).

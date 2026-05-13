@@ -25,7 +25,7 @@ from martymicfly.processing.beamform_grid import (
 )
 
 
-_CONE_MASK_MODES = ("rotor_cone", "target_cone", "drone_cone")
+_CONE_MASK_MODES = ("rotor_cone", "target_cone", "drone_disk")
 
 
 class DoaArrayFilterStage(ArrayFilterStage):
@@ -83,18 +83,18 @@ class DoaArrayFilterStage(ArrayFilterStage):
             fit_input.positions, target_dir, gcfg.target_cone_half_angle_deg,
         )
 
-        # drone_cone is now a "drone disk" — the equatorial belt around the
-        # rotor plane (z=0). Built as the complement of two cones along ±z
-        # with large opening angles, so all near-axial DOAs are excluded and
-        # only DOAs roughly in the rotor plane survive.
-        drone_cone_mask = build_doa_disk_mask(
+        # drone_disk is the equatorial belt around the rotor plane (z=0).
+        # Built as the complement of two cones along ±z with large opening
+        # angles, so all near-axial DOAs are excluded and only DOAs roughly
+        # in the rotor plane survive.
+        drone_disk_mask = build_doa_disk_mask(
             fit_input.positions, gcfg.drone_disk_half_width_deg,
         )
 
         if self.cfg.mask_mode == "rotor_cone":
             active = rotor_cone_mask
-        elif self.cfg.mask_mode == "drone_cone":
-            active = drone_cone_mask
+        elif self.cfg.mask_mode == "drone_disk":
+            active = drone_disk_mask
         else:  # "target_cone"
             active = ~target_cone_mask
 
@@ -103,12 +103,12 @@ class DoaArrayFilterStage(ArrayFilterStage):
             named={
                 "rotor_cone_mask": rotor_cone_mask,
                 "target_cone_mask": target_cone_mask,
-                "drone_cone_mask": drone_cone_mask,
+                "drone_disk_mask": drone_disk_mask,
                 # Aliases so the Cartesian-oriented downstream metadata
                 # consumers (run_pipeline plotting, compute_array_metrics)
                 # see something sensible. Semantically the analog mappings:
                 "rotor_disc_mask": rotor_cone_mask,
                 "target_box_mask": target_cone_mask,
-                "drone_box_mask": drone_cone_mask,
+                "drone_box_mask": drone_disk_mask,
             },
         )

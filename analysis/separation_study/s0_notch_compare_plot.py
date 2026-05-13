@@ -1,4 +1,4 @@
-"""S0 drone_cone: ext_only vs mixed (notch) vs mixed (kein notch) PSD/Error-Plot.
+"""S0 drone_disk: ext_only vs mixed (notch) vs mixed (kein notch) PSD/Error-Plot.
 
 Fährt drei Pipeline-Konfigurationen über das S0-Szenario:
   - ext_only             : reines externes Signal, keine Drohne, kein notch
@@ -41,8 +41,8 @@ from martymicfly.processing.steering import (
 
 log = logging.getLogger("s0_notch_compare")
 
-EXT_ONLY_CFG = "configs/pipeline_external_only_doa_drone_cone.yaml"
-MIXED_CFG    = "configs/pipeline_mixed_doa_drone_cone.yaml"
+EXT_ONLY_CFG = "configs/pipeline_external_only_doa_drone_disk.yaml"
+MIXED_CFG    = "configs/pipeline_mixed_doa_drone_disk.yaml"
 
 CASE_COLORS = {
     "ext_only":         "#1f77b4",   # blue
@@ -205,7 +205,7 @@ def main(argv: list[str] | None = None) -> int:
         shared_xaxes=False, vertical_spacing=0.08,
         specs=[[{"type": "xy"}], [{"type": "xy"}], [{"type": "table"}]],
         subplot_titles=("PSD: pre (dotted, input to array_filter) · post (solid) · GT (dashed)",
-                        "PSD error: 10·log10(post / GT) [dB]",
+                        "PSD error: 10·log10(post / GT) solid · 10·log10(post / pre) dotted [dB]",
                         "MAE per band [dB]"),
     )
 
@@ -234,6 +234,7 @@ def main(argv: list[str] | None = None) -> int:
         post_db = 10 * np.log10(np.maximum(post[mask], 1e-30))
         gt_db = 10 * np.log10(np.maximum(gt[mask], 1e-30))
         err_db = post_db - gt_db
+        filt_db = post_db - pre_db   # 10·log10(post/pre): spatial-filter attenuation
 
         fig.add_trace(go.Scatter(
             x=x, y=pre_db, mode="lines",
@@ -255,9 +256,15 @@ def main(argv: list[str] | None = None) -> int:
             gt_drawn = True
 
         fig.add_trace(go.Scatter(
-            x=x, y=err_db, mode="lines", name=f"{label} err",
+            x=x, y=err_db, mode="lines", name=f"{label} post/GT",
             legendgroup=case, showlegend=False,
             line=dict(color=color, width=1.5),
+        ), row=2, col=1)
+        fig.add_trace(go.Scatter(
+            x=x, y=filt_db, mode="lines", name=f"{label} post/pre",
+            legendgroup=case, showlegend=False,
+            line=dict(color=color, width=1.0, dash="dot"),
+            opacity=0.8,
         ), row=2, col=1)
 
         mae_per_band = []
@@ -301,7 +308,7 @@ def main(argv: list[str] | None = None) -> int:
     ), row=3, col=1)
 
     fig.update_layout(
-        title=(f"S0 drone_cone — ext_only vs mixed(+notch) vs mixed(no notch) "
+        title=(f"S0 drone_disk — ext_only vs mixed(+notch) vs mixed(no notch) "
                f"(nperseg={HIRES_NPERSEG}, Δf≈{51200/HIRES_NPERSEG:.2f} Hz)"),
         height=1050, width=1100, hovermode="x unified",
     )

@@ -11,7 +11,7 @@ output_root: results/separation_study/robustness
 scenarios: [S0, S1, S2, S3]
 configs:
   - configs/pipeline_mixed_doa_rotor_cone.yaml
-  - configs/pipeline_mixed_doa_drone_cone.yaml
+  - configs/pipeline_mixed_doa_drone_disk.yaml
   - configs/pipeline_mixed_doa_target_cone.yaml
 axes:
   # Empfohlene Anpassung: elevation_step von 5 auf 3

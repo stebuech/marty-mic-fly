@@ -115,7 +115,7 @@ def main() -> None:
     )
     palette = {
         "psd_pre": "#000000",
-        "psd_post[doa_drone_cone]": "#1f77b4",
+        "psd_post[doa_drone_disk]": "#1f77b4",
         "psd_post[doa_rotor_cone]": "#ff7f0e",
         "psd_post[doa_target_cone]": "#d62728",
         "psd_post[nnls]": "#2ca02c",

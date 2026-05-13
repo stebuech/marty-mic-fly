@@ -61,7 +61,7 @@ from martymicfly.processing.steering import steer_to_psd
 
 log = logging.getLogger("martymicfly.compare_modes")
 ALL_MODES = ("rotor_disc", "drone_box", "target_box")
-DOA_MODES = ("rotor_cone", "drone_cone", "target_cone")
+DOA_MODES = ("rotor_cone", "drone_disk", "target_cone")
 
 
 def _first_array_filter(cfg: AppConfig) -> ArrayFilterStageConfig:
@@ -217,7 +217,7 @@ def compare_doa_modes(
     target_cone_mask = build_doa_cone_mask(
         diag_grid, target_dir, gcfg.target_cone_half_angle_deg,
     )
-    drone_cone_mask = build_doa_disk_mask(
+    drone_disk_mask = build_doa_disk_mask(
         diag_grid, gcfg.drone_disk_half_width_deg,
     )
     psd_pre = steer_to_psd(csm, freqs, mic_positions, stage_cfg.target_point_m)
@@ -226,8 +226,8 @@ def compare_doa_modes(
     for mode in modes:
         if mode == "rotor_cone":
             sub = rotor_cone_mask
-        elif mode == "drone_cone":
-            sub = drone_cone_mask
+        elif mode == "drone_disk":
+            sub = drone_disk_mask
         elif mode == "target_cone":
             sub = ~target_cone_mask
         else:

@@ -15,5 +15,5 @@ axes:
   array_filter.clean_sc.r_diag: [false]
 configs:
   - configs/pipeline_mixed_doa_rotor_cone.yaml
-  - configs/pipeline_mixed_doa_drone_cone.yaml
+  - configs/pipeline_mixed_doa_drone_disk.yaml
   - configs/pipeline_mixed_doa_target_cone.yaml

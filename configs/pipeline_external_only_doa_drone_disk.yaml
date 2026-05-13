@@ -42,7 +42,7 @@ stages:
       - { name: mid,  f_min_hz: 500.0,  f_max_hz: 2000.0 }
       - { name: high, f_min_hz: 2000.0, f_max_hz: 6000.0 }
     target_point_m: [0.0, 0.0, -1.5]
-    mask_mode: drone_cone
+    mask_mode: drone_disk
     # DOA hemisphere search space:
     #   focal_radius=1.5 m matches the expected source distance, so the
     #   steering atoms on the sphere align well with the actual external
@@ -80,7 +80,7 @@ plots:
   channel_subset: null
 
 output:
-  dir: results/pipeline/ext_only_doa_drone_cone_{run_id}
+  dir: results/pipeline/ext_only_doa_drone_disk_{run_id}
   filtered_h5: filtered.h5
   metrics_json: metrics.json
   plots_subdir: plots

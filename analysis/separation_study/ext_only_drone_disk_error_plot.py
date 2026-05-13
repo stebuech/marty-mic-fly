@@ -1,6 +1,6 @@
-"""ext_only drone_cone PSD + PSD-Error-zu-GT Plot über S0/S1/S2/S3.
+"""ext_only drone_disk PSD + PSD-Error-zu-GT Plot über S0/S1/S2/S3.
 
-Fährt drone_cone × 4 Szenarien mit höherer CSM-Auflösung (nperseg=8192 →
+Fährt drone_disk × 4 Szenarien mit höherer CSM-Auflösung (nperseg=8192 →
 Δf ≈ 6.25 Hz statt 100 Hz) und f_min=50 Hz. Erzeugt einen 2-row-Plot:
   - oben: absolute PSD-Kurven (post solid, GT dashed) pro Szenario
   - unten: 10·log10(post / GT) pro Szenario
@@ -29,9 +29,9 @@ from martymicfly.processing.steering import (
     range_compensation_factor, steer_to_psd,
 )
 
-log = logging.getLogger("ext_only_drone_cone_err")
+log = logging.getLogger("ext_only_drone_disk_err")
 
-BASE_CFG = "configs/pipeline_external_only_doa_drone_cone.yaml"
+BASE_CFG = "configs/pipeline_external_only_doa_drone_disk.yaml"
 
 SCENARIO_COLORS = {
     "S0": "#1f77b4",   # blue
@@ -93,7 +93,7 @@ def _ensure_synth(s: dict) -> None:
 
 
 def _run(scenario: str, base_cfg: Path, s: dict, out_root: Path) -> Path:
-    run_dir = out_root / f"drone_cone__{scenario}"
+    run_dir = out_root / f"drone_disk__{scenario}"
     overrides = {
         "input.audio_h5": s["ext_only_audio_h5"],
         "input.ground_truth_h5": s["ext_only_gt_h5"],
@@ -104,7 +104,7 @@ def _run(scenario: str, base_cfg: Path, s: dict, out_root: Path) -> Path:
         "array_filter.csm.f_min_hz": F_MIN_HZ,
         "plots.enabled": False,
     }
-    log.info("run drone_cone/%s overrides=%s", scenario, overrides)
+    log.info("run drone_disk/%s overrides=%s", scenario, overrides)
     return run_pipeline_with_overrides(
         base_config_path=base_cfg, overrides=overrides, output_dir=run_dir,
     )
@@ -234,11 +234,11 @@ def main(argv: list[str] | None = None) -> int:
     ), row=3, col=1)
 
     fig.update_layout(
-        title=(f"ext_only drone_cone — S0/S1/S2/S3 (nperseg={HIRES_NPERSEG}, "
+        title=(f"ext_only drone_disk — S0/S1/S2/S3 (nperseg={HIRES_NPERSEG}, "
                f"Δf≈{51200/HIRES_NPERSEG:.2f} Hz)"),
         height=1050, width=1100, hovermode="x unified",
     )
-    out_html = args.out_dir / "drone_cone_psd_error.html"
+    out_html = args.out_dir / "drone_disk_psd_error.html"
     fig.write_html(out_html, include_plotlyjs="cdn")
     log.info("wrote %s", out_html)
     return 0

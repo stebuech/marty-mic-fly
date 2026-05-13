@@ -88,7 +88,7 @@ def test_compare_doa_modes_runs_three_cones_on_single_fit():
         platform=synth["platform"],
         stage_cfg=cfg,
     )
-    assert set(report["per_mode"].keys()) == {"rotor_cone", "drone_cone", "target_cone"}
+    assert set(report["per_mode"].keys()) == {"rotor_cone", "drone_disk", "target_cone"}
     for m in report["per_mode"].values():
         assert "mid" in m["bands"]
         assert np.isfinite(m["bands"]["mid"]["csm_trace_reduction_db"])
