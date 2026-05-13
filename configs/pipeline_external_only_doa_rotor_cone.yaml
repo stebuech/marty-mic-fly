@@ -59,7 +59,7 @@ stages:
       hemisphere: lower
       rotor_cone_half_angle_deg: 30.0
       target_cone_half_angle_deg: 45.0
-      drone_disk_half_width_deg: 15.0
+      drone_disk_half_width_deg: 20.0
     rotor_z_tolerance_m: 0.25
     clean_sc:
       damp: 0.6

@@ -168,7 +168,7 @@ class DoaGridConfig(BaseModel):
     # the complement of two ±z cones with large opening angles. This
     # parameter is the half-width of the belt in degrees of elevation
     # off the rotor plane (so 15° → ±15° band).
-    drone_disk_half_width_deg: float = Field(default=15.0, gt=0.0, le=90.0)
+    drone_disk_half_width_deg: float = Field(default=20.0, gt=0.0, le=90.0)
 
 
 class AtomSetConfig(BaseModel):
