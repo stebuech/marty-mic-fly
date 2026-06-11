@@ -80,6 +80,43 @@ def test_compose_external_drone_plus_external_equals_mix(tmp_path):
     np.testing.assert_allclose(mix, drone_only + ext_only, atol=1e-9)
 
 
+def test_compose_drone_only_writes_synth_without_external_or_gt(tmp_path):
+    """Drone-only synth: drone propagated to mics, no external group, no GT file."""
+    from martymicfly.synth.compose_external import (
+        compose_drone_only,
+        _propagate_drone_only,
+    )
+    art = tmp_path / "art.h5"
+    geom = tmp_path / "g.xml"
+    out_synth = tmp_path / "drone_only.h5"
+    _write_artifact(art)
+    _write_geom_xml(geom, [(0.3, 0.0, 0.0), (-0.3, 0.0, 0.0)])
+    compose_drone_only(str(art), str(geom), str(out_synth))
+    assert out_synth.exists()
+    drone_only = _propagate_drone_only(str(art), str(geom))
+    with h5py.File(out_synth, "r") as f:
+        assert f["time_data"].shape == (1600, 2)
+        assert "platform" in f
+        assert "external" not in f
+        np.testing.assert_allclose(np.asarray(f["time_data"][...]), drone_only, atol=1e-9)
+
+
+def test_compose_drone_only_loads_via_load_synth_h5(tmp_path):
+    from martymicfly.synth.compose_external import compose_drone_only
+    from martymicfly.io.synth_h5 import load_synth_h5
+    art = tmp_path / "art.h5"
+    geom = tmp_path / "g.xml"
+    out_synth = tmp_path / "drone_only.h5"
+    _write_artifact(art)
+    _write_geom_xml(geom, [(0.3, 0.0, 0.0), (-0.3, 0.0, 0.0)])
+    compose_drone_only(str(art), str(geom), str(out_synth))
+    res = load_synth_h5(str(out_synth))
+    assert res["sample_rate"] == 16000.0
+    assert res["time_data"].shape == (1600, 2)
+    assert res["platform"] is not None
+    assert res["platform"]["n_rotors"] == 2
+
+
 def test_compose_external_synth_loads_via_load_synth_h5(tmp_path):
     """Round-trip: synth file produced by compose_external is consumable by load_synth_h5."""
     from martymicfly.synth.compose_external import compose_external

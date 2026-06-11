@@ -20,11 +20,51 @@ from martymicfly.synth.external_source import (
 from martymicfly.synth.propagation import greens_propagate
 
 
-def _propagate_drone_only(artifact_path: str, mic_geom_path: str) -> np.ndarray:
+def _propagate_drone_only(
+    artifact_path: str, mic_geom_path: str, speed_of_sound: float = SPEED_OF_SOUND
+) -> np.ndarray:
     art = load_source_artifact(artifact_path)
     mic_pos = load_mic_geom_xml(mic_geom_path)
     return greens_propagate(art.subsource_signals, art.subsource_positions, mic_pos,
-                            art.sample_rate)
+                            art.sample_rate, speed_of_sound)
+
+
+def _write_synth_measurement(out_synth_path, mix, art, external_attrs=None) -> None:
+    out_synth = Path(out_synth_path)
+    out_synth.parent.mkdir(parents=True, exist_ok=True)
+    with h5py.File(out_synth, "w") as f:
+        f.attrs["composed_by"] = "martymicfly.synth.compose_external"
+        td = f.create_dataset("time_data", data=mix)
+        td.attrs["sample_freq"] = float(art.sample_rate)
+        plat = f.create_group("platform")
+        plat.attrs["n_rotors"] = int(art.rotor_positions.shape[1])
+        plat["rotor_positions"] = art.rotor_positions
+        plat["rotor_radii"] = art.rotor_radii
+        plat["blade_counts"] = art.blade_counts
+        rpm = f.create_group("esc_telemetry")
+        for name, data in art.rpm_per_esc.items():
+            g = rpm.create_group(name)
+            g["rpm"] = data["rpm"]
+            g["timestamp"] = data["timestamp"]
+        if external_attrs is not None:
+            ext_g = f.create_group("external")
+            for key, val in external_attrs.items():
+                ext_g.attrs[key] = val
+
+
+def compose_drone_only(
+    artifact_path: str,
+    mic_geom_path: str,
+    out_synth_path: str,
+    speed_of_sound: float = SPEED_OF_SOUND,
+) -> None:
+    """Synth measurement with ONLY the drone propagated to the mics (no external
+    source, no ground-truth file). Scenario-independent: depends solely on the
+    drone source artifact.
+    """
+    art = load_source_artifact(artifact_path)
+    drone_at_mics = _propagate_drone_only(artifact_path, mic_geom_path, speed_of_sound)
+    _write_synth_measurement(out_synth_path, drone_at_mics, art)
 
 
 def _propagate_external_only(
@@ -85,29 +125,14 @@ def compose_external(
 
     mix = drone_at_mics + ext_at_mics
 
-    out_synth = Path(out_synth_path)
-    out_synth.parent.mkdir(parents=True, exist_ok=True)
-    with h5py.File(out_synth, "w") as f:
-        f.attrs["composed_by"] = "martymicfly.synth.compose_external"
-        td = f.create_dataset("time_data", data=mix)
-        td.attrs["sample_freq"] = float(art.sample_rate)
-        plat = f.create_group("platform")
-        plat.attrs["n_rotors"] = int(art.rotor_positions.shape[1])
-        plat["rotor_positions"] = art.rotor_positions
-        plat["rotor_radii"] = art.rotor_radii
-        plat["blade_counts"] = art.blade_counts
-        rpm = f.create_group("esc_telemetry")
-        for name, data in art.rpm_per_esc.items():
-            g = rpm.create_group(name)
-            g["rpm"] = data["rpm"]
-            g["timestamp"] = data["timestamp"]
-        ext_g = f.create_group("external")
-        ext_g.attrs["kind"] = ext_spec.kind
-        ext_g.attrs["amplitude_db"] = float(ext_spec.amplitude_db)
-        ext_g.attrs["position_m"] = np.asarray(ext_spec.position_m, dtype=np.float64)
-        ext_g.attrs["seed"] = int(ext_spec.seed) if ext_spec.seed is not None else -1
-        ext_g.attrs["speed_of_sound"] = float(speed_of_sound)
-        ext_g.attrs["propagation"] = "greens_1_over_r"
+    _write_synth_measurement(out_synth_path, mix, art, external_attrs={
+        "kind": ext_spec.kind,
+        "amplitude_db": float(ext_spec.amplitude_db),
+        "position_m": np.asarray(ext_spec.position_m, dtype=np.float64),
+        "seed": int(ext_spec.seed) if ext_spec.seed is not None else -1,
+        "speed_of_sound": float(speed_of_sound),
+        "propagation": "greens_1_over_r",
+    })
 
     out_gt = Path(out_gt_path)
     out_gt.parent.mkdir(parents=True, exist_ok=True)
