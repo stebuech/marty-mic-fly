@@ -1,0 +1,85 @@
+input:
+  audio_h5: /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/ap2a_synth_mixed_gaptip.h5
+  mic_geom_xml: /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/mic_geom.xml
+  ground_truth_h5: /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/ap2a_synth_mixed_gaptip_gt.h5
+
+segment:
+  mode: middle
+  duration: 10.0
+
+channels:
+  selection: all
+
+rotor:
+  n_blades: 2
+  n_harmonics: 13
+
+# Mixed (drone + external) + DOA hemisphere + rotor_cone mask, but with
+# orthogonal deconvolution instead of CLEAN-SC. AP2-A names three deconvolution
+# methods (orthogonale Entfaltung, CLEAN-SC, CLEAN-T); this is the orthogonal
+# variant. Orthogonal beamforming maps the strongest CSM eigenmodes onto the
+# grid — non-iterative, no source-coherence step, tends to be more stable on
+# small arrays than CLEAN-SC.
+stages:
+  - kind: notch
+    pole_radius:
+      mode: scalar
+      value: 0.9996
+    multichannel: false
+    block_size: 4096
+
+  - kind: array_filter
+    algorithm: orth
+    csm:
+      nperseg: 512
+      noverlap: 256
+      window: hann
+      diag_loading_rel: 1.0e-6
+      f_min_hz: 200.0
+      f_max_hz: 6000.0
+    # diagnostic_grid is required by the schema but ignored when doa_grid is set.
+    diagnostic_grid:
+      extent_xy_m: 0.5
+      increment_m: 0.05
+      z_min_m: -1.6
+      z_max_m: 0.1
+    bands:
+      - { name: low,  f_min_hz: 200.0,  f_max_hz: 500.0 }
+      - { name: mid,  f_min_hz: 500.0,  f_max_hz: 2000.0 }
+      - { name: high, f_min_hz: 2000.0, f_max_hz: 6000.0 }
+    target_point_m: [0.0, 0.0, -1.5]
+    mask_mode: rotor_cone
+    doa_grid:
+      focal_radius_m: 1.5
+      azimuth_step_deg: 5.0
+      elevation_step_deg: 5.0
+      hemisphere: lower
+      rotor_cone_half_angle_deg: 30.0
+      target_cone_half_angle_deg: 45.0
+      drone_disk_half_width_deg: 20.0
+    rotor_z_tolerance_m: 0.25
+    # Orthogonal deconvolution: map the n strongest CSM eigenmodes. n ≳ number
+    # of incoherent sources (rotor sub-sources + external), < eigenvalue count.
+    orth:
+      n: 8
+      r_diag: true
+
+metrics:
+  welch_nperseg: 8192
+  welch_noverlap: 4096
+  bandwidth_factor: 1.0
+  broadband_low_hz: null
+
+plots:
+  enabled: true
+  fmax_hz: null
+  spectrogram_window: 4096
+  spectrogram_overlap: 2048
+  channel_subset: null
+
+output:
+  dir: results/pipeline/mixed_doa_rotor_cone_orth_{run_id}
+  filtered_h5: filtered.h5
+  metrics_json: metrics.json
+  plots_subdir: plots
+  copy_config: true
