@@ -1,0 +1,74 @@
+# Pull vs Push Rotor Configuration Comparison
+# Example Configuration File
+#
+# This configuration file defines the measurement files and analysis parameters
+# for comparing Pull (rotors upward) and Push (rotors downward) configurations.
+#
+# Usage:
+#   python analysis/compare_rotor_configs.py analysis/example_config.yaml
+
+comparison:
+  name: "Pull vs Push Rotor Configuration Comparison"
+  description: "RAR anechoic chamber measurements - December 2025"
+
+  # Pull Configuration (rotors upward - standard orientation)
+  pull_config:
+    mic_h5: "../../Messdaten/2025_12_05_RAR_Drone_TRANSIT_BVG_Array/td/2025-12-05_16-26-27_468418.h5"
+    rpm_h5: "../../Messdaten/2025_12_05_RAR_Drone_TRANSIT_BVG_Array/rpm_data/telemetry_data_20251205_152626.h5"
+    description: "Pull configuration (rotors upward)"
+
+  # Push Configuration (rotors downward - inverted orientation)
+  push_config:
+    mic_h5: "../../Messdaten/2025_12_05_RAR_Drone_TRANSIT_BVG_Array/td/2025-12-05_16-51-06_934842.h5"
+    rpm_h5: "../../Messdaten/2025_12_05_RAR_Drone_TRANSIT_BVG_Array/rpm_data/telemetry_data_20251205_155105.h5"
+    description: "Push configuration (rotors downward)"
+
+  # Shared Resources
+  shared:
+    array_xml: "../../Messdaten/2025_12_05_RAR_Drone_TRANSIT_BVG_Array/mics_ref.xml"
+    measurement_protocol: "../../Messdaten/2025_12_05_RAR_Drone_TRANSIT_BVG_Array/2025_12_05_RAR_Drone_1st_test.ods"
+
+  # Analysis Parameters
+  analysis_params:
+    # Data Processing
+    stable_duration: 30.0  # Duration of stable segment to extract (seconds)
+    max_rpm_cv: 0.05       # Maximum coefficient of variation for RPM stability
+
+    # Frequencies for Analysis
+    analysis_frequencies: [500, 1000, 2000, 4000, 8000]  # Hz
+
+    # Drone Configuration
+    drone_config:
+      n_rotors: 4
+      n_blades: 2
+      pole_pairs: 24
+      position: [0.0, 0.375, 0.85]  # [x, y, z] in meters relative to array center
+
+    # BPF Harmonic Extraction
+    bpf_harmonics:
+      n_harmonics: 20           # Number of harmonics to extract
+      search_width_hz: 5.0      # Search window around each harmonic (Hz)
+
+    # Sound Power Measurement (ISO 3744)
+    sound_power:
+      radius: 2.0               # Hemisphere radius (meters)
+      n_points: 20              # Number of measurement points on hemisphere
+      freq_range: [100, 10000]  # Frequency range [min, max] (Hz)
+      use_notch: true           # Enable adaptive notch filtering for ego-noise
+
+    # Beamforming Parameters
+    beamforming:
+      grid_size: 2.0            # Grid extent ±from center (meters)
+      grid_increment: 0.025       # Grid spacing (meters)
+      grid_z: 2.0               # Grid distance from array (meters)
+      target_band: 1            # Frequency band: 1=octave, 3=third-octave
+
+    # Spectral Analysis
+    spectral:
+      nperseg: 8192             # Segment length for Welch's method
+      noverlap: 4096            # Overlap between segments
+
+  # Output Configuration
+  output_dir: "results/pull_vs_push_comparison"
+  create_interactive_plots: true  # Generate HTML interactive plots
+  create_pdf_report: true        # Generate PDF report (requires weasyprint or pandoc)
