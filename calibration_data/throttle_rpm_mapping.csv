@@ -1,0 +1,25 @@
+# Averaged Throttle-RPM Calibration
+# Processing date: 2025-12-04 09:56:01
+#
+# Original file metadata:
+#   Date: 2025-12-02 16:03:43
+#   ESCs: 4
+#   DShot Speed: 300
+#   Stabilization Time: 4.0s
+#   Maximum Throttle: 55%
+#   Pole Count: 24
+#
+throttle_percent,rpm_mean
+0.0,0.0
+5.0,457.2
+10.0,886.1
+15.0,1232.3
+20.0,1546.3
+25.0,1876.9
+30.0,2178.1
+35.0,2512.3
+40.0,2797.5
+45.0,3080.1
+50.0,3367.0
+55.0,3658.7
+100.0,6231.5
