@@ -1,0 +1,30 @@
+# Phase 2: Focused sweep on the 3 top dominant axes from phase 1.
+#
+# Top-3 dominant axes (mean |Δ| over (method × band) on over_subtraction_db
+# and drone_leakage_db_def2):
+#   1. csm.nperseg                      (l1: 1.0 dB, over: 1.3 dB, def2: 2.5 dB)
+#   2. doa_grid.focal_radius_m          (l1: 0.4 dB, over: 1.0 dB, def2: 0.8 dB)
+#   3. doa_grid.elevation_step_deg      (l1: 0.4 dB, over: 1.1 dB, def2: 0.6 dB)
+#      (azimuth_step_deg has nearly the same effect — typically swept jointly)
+#
+# Surprisingly NOT in the top: clean_sc.damp / n_iter / r_diag — all under
+# 0.2 dB on l1/leakage. The CLEAN-SC convergence params barely move the
+# bulk metrics; the sensitivity is dominated by CSM resolution and DOA grid
+# geometry. Phase 2 will still spot-check a coarse damp sweep but mainly
+# focuses on the geometric axes.
+#
+# Phase-1 best DOA method on S0 baseline (lowest spectrum_l1_db, mid band):
+#   doa_target_cone (l1=-2.82 dB) — used as the primary phase-2 config.
+
+phase: phase2
+output_root: results/separation_study/phase2_focused_sweep
+scenarios: [S0]
+configs:
+  - configs/pipeline_mixed_doa_target_cone.yaml
+axes:
+  array_filter.csm.nperseg: [128, 256, 512, 1024, 2048]
+  array_filter.doa_grid.focal_radius_m: [0.8, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5]
+  array_filter.doa_grid.elevation_step_deg: [2.0, 3.0, 5.0, 7.5, 10.0]
+  array_filter.doa_grid.azimuth_step_deg: [2.0, 3.0, 5.0, 7.5, 10.0]
+  # spot-check (low-priority based on phase 1):
+  array_filter.clean_sc.damp: [0.4, 0.6, 0.8]

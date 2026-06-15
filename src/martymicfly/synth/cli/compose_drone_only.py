@@ -1,0 +1,49 @@
+"""CLI: read drone-only compose-config YAML, run compose_drone_only, write synth."""
+from __future__ import annotations
+
+import argparse
+import logging
+from pathlib import Path
+
+import yaml
+from pydantic import BaseModel, ConfigDict
+
+from martymicfly.synth.compose_external import compose_drone_only
+
+
+class _Input(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    drone_source_artifact_h5: str
+    mic_geom_xml: str
+
+
+class _Output(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    synth_h5: str
+
+
+class _AppConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    input: _Input
+    output: _Output
+
+
+def main(argv: list[str] | None = None) -> int:
+    p = argparse.ArgumentParser(prog="compose_drone_only")
+    p.add_argument("--config", required=True)
+    p.add_argument("--log-level", default="INFO")
+    args = p.parse_args(argv)
+    logging.basicConfig(level=args.log_level, format="%(asctime)s %(levelname)s %(message)s")
+    payload = yaml.safe_load(Path(args.config).read_text())
+    cfg = _AppConfig.model_validate(payload)
+    compose_drone_only(
+        cfg.input.drone_source_artifact_h5,
+        cfg.input.mic_geom_xml,
+        cfg.output.synth_h5,
+    )
+    logging.getLogger("martymicfly.compose").info("wrote %s", cfg.output.synth_h5)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

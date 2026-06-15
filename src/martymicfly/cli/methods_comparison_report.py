@@ -1,0 +1,514 @@
+"""Comprehensive Stage-2 methods comparison report.
+
+Runs the two Stage-2 methods (DOA hemisphere + CLEAN-SC, NNLS on known
+atoms) on both the external-only methodology reference and the mixed
+(drone + external) production data, then emits a single multi-panel
+HTML report:
+
+    1. Setup summary
+    2. Localization tables per method × scenario
+    3. Subtraction aggressiveness (csm_red) per band/mode/method
+    4. Methodology floor: ext-only false-positive subtraction
+    5. Mixed-data external-source recovery (ext_rec, MAE)
+    6. Cross-term damage: ext_rec(mixed) − ext_rec(ext-only)
+    7. Pseudo-target PSD overlay (mixed)
+
+Usage:
+    python -m martymicfly.cli.methods_comparison_report \\
+        [--out path/to/report.html]
+
+Default output: results/methods_comparison_report.html.
+The set of configs evaluated is hardcoded (six scenarios). Edit
+``_SCENARIO_GROUPS`` in this file to evaluate a different set.
+"""
+from __future__ import annotations
+
+import argparse
+import logging
+from dataclasses import dataclass
+from pathlib import Path
+
+import numpy as np
+import plotly.graph_objects as go
+import yaml
+from plotly.subplots import make_subplots
+
+from martymicfly.cli.compare_modes import (
+    _classify_method,
+    _first_array_filter,
+    _load_segment_and_gt,
+    compare_doa_modes,
+    compare_mask_modes,
+    compare_nnls,
+)
+from martymicfly.config import AppConfig, DoaGridConfig
+from martymicfly.eval.array_plots import build_mask_geometry_3d_fig
+from martymicfly.io.mic_geom import load_mic_geom_xml
+from martymicfly.io.synth_h5 import load_synth_h5
+
+log = logging.getLogger("martymicfly.methods_comparison_report")
+
+
+_SCENARIO_GROUPS: dict[str, dict[str, str]] = {
+    "ext_only": {
+        "doa": "configs/pipeline_external_only_doa_target_cone.yaml",
+        "nnls": "configs/pipeline_external_only_nnls.yaml",
+    },
+    "mixed": {
+        "doa": "configs/pipeline_mixed_doa_target_cone.yaml",
+        "nnls": "configs/pipeline_mixed_nnls.yaml",
+    },
+}
+
+
+@dataclass
+class _MethodResult:
+    method: str             # doa | nnls
+    scenario: str           # ext_only | mixed
+    config_path: str
+    report: dict
+
+
+def _run_one(scenario: str, method: str, cfg_path: str) -> _MethodResult:
+    log.info("[%s/%s] %s", scenario, method, cfg_path)
+    cfg = AppConfig.model_validate(yaml.safe_load(Path(cfg_path).read_text()))
+    stage_cfg = _first_array_filter(cfg)
+    classified = _classify_method(stage_cfg)
+    if classified != method:
+        log.warning(
+            "[%s/%s] config classifies as %r, not %r — using config's classification",
+            scenario, method, classified, method,
+        )
+        method = classified
+
+    src, geom, td, fs, gt_block = _load_segment_and_gt(cfg, stage_cfg)
+    common = dict(time_data=td, sample_rate=fs, mic_positions=geom,
+                  platform=src["platform"], stage_cfg=stage_cfg,
+                  gt_block=gt_block)
+    if method == "doa":
+        report = compare_doa_modes(**common)
+    elif method == "nnls":
+        report = compare_nnls(**common)
+    else:
+        report = compare_mask_modes(**common)
+    return _MethodResult(method=method, scenario=scenario,
+                          config_path=cfg_path, report=report)
+
+
+def _collect_scalar(
+    results: list[_MethodResult],
+    metric: str,                # 'csm_trace_reduction_db' | 'target_psd_reduction_db' |
+                                # 'ground_truth.external_recovery_db' |
+                                # 'ground_truth.spectrum_mae_db'
+    scenario: str | None = None,
+) -> list[tuple[str, str, str, float]]:
+    """Return list of (label, mode, band, value) entries for a chosen metric."""
+    rows: list[tuple[str, str, str, float]] = []
+    for r in results:
+        if scenario is not None and r.scenario != scenario:
+            continue
+        for mode, m in r.report["per_mode"].items():
+            for band_name, b in m["bands"].items():
+                if "." in metric:
+                    a, k = metric.split(".", 1)
+                    sub = b.get(a) or {}
+                    val = sub.get(k)
+                else:
+                    val = b.get(metric)
+                if val is None or not np.isfinite(val):
+                    continue
+                label = f"{r.method}/{mode}"
+                rows.append((label, mode, band_name, float(val)))
+    return rows
+
+
+def _bar_per_band_grouped(
+    rows: list[tuple[str, str, str, float]],
+    title: str,
+    y_label: str,
+    out_traces: list[go.Bar],
+    band_order: list[str],
+    color_map: dict[str, str],
+) -> None:
+    """Group rows by label (= method/mode), draw one bar per band on x.
+
+    Bars share x-axis ['low','mid','high']; one bar group per (method,mode).
+    """
+    labels_in_order: list[str] = []
+    for lab, _, _, _ in rows:
+        if lab not in labels_in_order:
+            labels_in_order.append(lab)
+    for lab in labels_in_order:
+        ys = []
+        for band in band_order:
+            v = next(
+                (val for (lab2, _mode, b2, val) in rows
+                 if lab2 == lab and b2 == band),
+                None,
+            )
+            ys.append(v if v is not None else float("nan"))
+        out_traces.append(go.Bar(
+            x=band_order, y=ys, name=lab,
+            marker_color=color_map.get(lab.split("/")[0], None),
+            hovertemplate=f"{lab}<br>%{{x}} band<br>{y_label}=%{{y:.2f}}<extra></extra>",
+        ))
+
+
+def _localization_html_blocks(results: list[_MethodResult]) -> str:
+    """Build an HTML <pre> block per (scenario, method) summarizing
+    localization."""
+    parts: list[str] = []
+    for r in results:
+        loc = r.report["localization"]
+        parts.append(f"<h4>{r.scenario} / {r.method}</h4>")
+        if loc.get("kind") == "nnls_atom_powers":
+            lines = [f"NNLS atom-power shares — target=("
+                     f"{loc['target_xyz_m'][0]:+.2f},{loc['target_xyz_m'][1]:+.2f},"
+                     f"{loc['target_xyz_m'][2]:+.2f}) m"]
+            lines.append(f"{'band':<6}{'drone [dB]':>12}{'target [dB]':>13}{'diffuse [dB]':>14}")
+            for name, b in loc["bands"].items():
+                d = b["drone_db"]; t = b["target_db"]; df = b["diffuse_db"]
+                d_s = f"{d:>11.2f}" if np.isfinite(d) else f"{'-inf':>11}"
+                t_s = f"{t:>12.2f}" if np.isfinite(t) else f"{'-inf':>12}"
+                df_s = f"{df:>13.2f}" if np.isfinite(df) else f"{'n/a':>13}"
+                lines.append(f"{name:<6}{d_s} {t_s} {df_s}")
+            parts.append(f"<pre>{chr(10).join(lines)}</pre>")
+        else:
+            tx, ty, tz = loc["target_xyz_m"]
+            ztol = loc["z_tolerance_m"]; dtol = loc["drone_z_tolerance_m"]
+            lines = [
+                f"CLEAN-SC localization — target=({tx:+.2f},{ty:+.2f},{tz:+.2f}) m, "
+                f"grid={loc['grid_shape']}",
+                f"{'band':<6}{'peak (x,y,z) [m]':<26}{'z 10-90% [m]':<22}"
+                f"{'@target±'+str(ztol)+'m':<14}{'@drone±'+str(dtol)+'m':<14}",
+            ]
+            for name, b in loc["bands"].items():
+                px, py, pz = b["peak_xyz_m"]
+                z10, z90 = b["z_span_10_90_m"]
+                lines.append(
+                    f"{name:<6}({px:+.2f},{py:+.2f},{pz:+.2f})       "
+                    f"[{z10:+.2f},{z90:+.2f}]      "
+                    f"{b['frac_at_target_z']:>9.2%}     {b['frac_at_drone_z']:>9.2%}"
+                )
+            parts.append(f"<pre>{chr(10).join(lines)}</pre>")
+    return "\n".join(parts)
+
+
+def _ext_rec_floor_table(results: list[_MethodResult]) -> str:
+    """ext_rec ext-only vs mixed and the cross-term Δ as an HTML table."""
+    by_label_band: dict[tuple[str, str, str], float] = {}
+    for r in results:
+        for mode, m in r.report["per_mode"].items():
+            for band, b in m["bands"].items():
+                gt = b.get("ground_truth") or {}
+                er = gt.get("external_recovery_db")
+                if er is None:
+                    continue
+                by_label_band[(r.scenario, f"{r.method}/{mode}", band)] = float(er)
+
+    methods_modes: list[str] = []
+    for (_, lab, _) in by_label_band.keys():
+        if lab not in methods_modes:
+            methods_modes.append(lab)
+    bands = ["low", "mid", "high"]
+
+    rows = ["<table border='1' cellpadding='4' style='border-collapse: collapse;'>"]
+    rows.append("<tr><th>method/mode</th><th>band</th>"
+                "<th>ext_rec ext-only [dB]</th><th>ext_rec mixed [dB]</th>"
+                "<th>Δ [dB] (cross-term)</th></tr>")
+    for lab in methods_modes:
+        for band in bands:
+            ext = by_label_band.get(("ext_only", lab, band))
+            mix = by_label_band.get(("mixed", lab, band))
+            if ext is None and mix is None:
+                continue
+            delta = (mix - ext) if (ext is not None and mix is not None) else None
+            ext_s = f"{ext:+.2f}" if ext is not None else ""
+            mix_s = f"{mix:+.2f}" if mix is not None else ""
+            delta_s = f"{delta:+.2f}" if delta is not None else ""
+            rows.append(
+                f"<tr><td>{lab}</td><td>{band}</td>"
+                f"<td>{ext_s}</td><td>{mix_s}</td><td>{delta_s}</td></tr>"
+            )
+    rows.append("</table>")
+    return "\n".join(rows)
+
+
+def _build_mask_geometry_html(results: list[_MethodResult]) -> str:
+    """Build the 3D DOA mask geometry figure and return its embedded HTML.
+
+    The geometry only depends on platform + DOA stage_cfg, not on the
+    audio data — one representative DOA config is sufficient.
+    """
+    doa_ref = next((r for r in results
+                    if r.scenario == "mixed" and r.method == "doa"), None)
+    if doa_ref is None:
+        return ("<p><i>(mask geometry skipped — missing DOA config in the "
+                "mixed scenario)</i></p>")
+    cfg_doa = AppConfig.model_validate(yaml.safe_load(Path(doa_ref.config_path).read_text()))
+    stage_doa = _first_array_filter(cfg_doa)
+    src = load_synth_h5(cfg_doa.input.audio_h5)
+    mic_pos = load_mic_geom_xml(cfg_doa.input.mic_geom_xml)
+    plat = src["platform"]
+    doa = stage_doa.doa_grid or DoaGridConfig()
+
+    geom_fig = build_mask_geometry_3d_fig(
+        mic_positions=mic_pos,
+        rotor_positions=np.asarray(plat["rotor_positions"]),
+        rotor_radii=np.asarray(plat["rotor_radii"]),
+        target_point_m=tuple(float(v) for v in stage_doa.target_point_m),
+        doa_focal_radius_m=float(doa.focal_radius_m),
+        doa_hemisphere=doa.hemisphere,
+        rotor_cone_half_angle_deg=float(doa.rotor_cone_half_angle_deg),
+        target_cone_half_angle_deg=float(doa.target_cone_half_angle_deg),
+        drone_disk_half_width_deg=float(doa.drone_disk_half_width_deg),
+    )
+    return geom_fig.to_html(full_html=False, include_plotlyjs=False)
+
+
+def _build_report_html(
+    out_path: Path,
+    results: list[_MethodResult],
+) -> None:
+    band_order = ["low", "mid", "high"]
+    color_map = {"doa": "#1f77b4", "nnls": "#2ca02c"}
+
+    # --- Section 3 + 4 + 5: Bar plots ---
+    fig = make_subplots(
+        rows=4, cols=2,
+        subplot_titles=[
+            "csm_red [dB] — ext-only (false-positive subtraction)",
+            "csm_red [dB] — mixed (drone + external)",
+            "ext_rec [dB] — ext-only (methodology floor)",
+            "ext_rec [dB] — mixed (filter performance)",
+            "spectrum_mae [dB] — ext-only",
+            "spectrum_mae [dB] — mixed",
+            "drone_share [dB] — ext-only",
+            "drone_share [dB] — mixed",
+        ],
+        vertical_spacing=0.10, horizontal_spacing=0.08,
+    )
+    for i, scenario in enumerate(("ext_only", "mixed")):
+        col = i + 1
+        for row, metric, ylabel in [
+            (1, "csm_trace_reduction_db", "csm_red"),
+            (2, "ground_truth.external_recovery_db", "ext_rec"),
+            (3, "ground_truth.spectrum_mae_db", "mae"),
+            (4, "drone_power_share_db", "drone_share"),
+        ]:
+            rows_ = _collect_scalar(results, metric, scenario=scenario)
+            traces: list[go.Bar] = []
+            _bar_per_band_grouped(rows_, "", ylabel, traces, band_order, color_map)
+            for t in traces:
+                # only show legend in first subplot to avoid duplicate entries
+                t.showlegend = (row == 1 and col == 1)
+                fig.add_trace(t, row=row, col=col)
+
+    fig.update_layout(
+        title="Stage-2 method comparison — DOA vs NNLS",
+        barmode="group",
+        height=1200, width=1500,
+        legend=dict(orientation="v", x=1.02, y=1.0),
+    )
+
+    # --- Section 7: target PSD overlay (mixed) ---
+    # Distinguish mode within method via line dash + width; method via color.
+    def _mode_style(mode: str) -> tuple[str, float]:
+        m = mode.lower()
+        if m.startswith("rotor"):
+            return ("solid", 1.5)
+        if m.startswith("drone"):
+            return ("dash", 1.5)
+        if m.startswith("target"):
+            return ("dot", 1.5)
+        return ("solid", 1.8)   # nnls / unknown
+
+    def _psd_db(arr) -> np.ndarray:
+        """PSD → dB, but mask out saturated/clipped values so plotly leaves
+        a gap instead of drawing a −300 dB spike."""
+        a = np.asarray(arr, dtype=np.float64)
+        out = np.full_like(a, np.nan)
+        valid = a > 1e-29
+        out[valid] = 10.0 * np.log10(a[valid])
+        return out
+
+    # --- Section 6: filter quality — cross-term damage spectrum ---
+    # Per (method, mode):
+    #   R(f) = post_mixed_db(f) − post_extonly_db(f)
+    # The ~27 dB phase-only steering bias is identical in both scenarios and
+    # cancels out, so R(f) directly measures the filter-induced cross-term.
+    # Reference: L(f) = pre_mixed_db − pre_extonly_db, the drone leakage at
+    # the target point before any filtering — i.e. what the filter has to do.
+    by_method_scen: dict[str, dict[str, dict]] = {}
+    for r in results:
+        by_method_scen.setdefault(r.method, {})[r.scenario] = r.report
+
+    psd_fig = go.Figure()
+    psd_fig.add_annotation(
+        text=("Filterqualität am Target. R(f) = post_mixed − post_extonly [dB]. "
+              "Methodikboden (~27 dB) hebt sich auf. R≈0 ⇔ Filter perfekt; "
+              "R>0 ⇔ Drohnen-Restleakage; R<0 ⇔ Übersubtraktion."),
+        xref="paper", yref="paper", x=0.0, y=1.08, showarrow=False,
+    )
+
+    ref_methods = list(by_method_scen.keys())
+    if ref_methods:
+        scen0 = by_method_scen[ref_methods[0]]
+        if "mixed" in scen0 and "ext_only" in scen0:
+            freqs_ref = scen0["mixed"].get("frequencies")
+            pre_mix = scen0["mixed"].get("psd_pre")
+            pre_ext = scen0["ext_only"].get("psd_pre")
+            if (freqs_ref is not None
+                    and pre_mix is not None and pre_ext is not None):
+                L_db = _psd_db(pre_mix) - _psd_db(pre_ext)
+                psd_fig.add_trace(go.Scatter(
+                    x=freqs_ref, y=L_db, mode="lines",
+                    name="drone leakage @ target (kein Filter)",
+                    line=dict(color="black", width=2.5, dash="dashdot"),
+                ))
+
+    for method, scen in by_method_scen.items():
+        if "mixed" not in scen or "ext_only" not in scen:
+            continue
+        freqs = scen["mixed"].get("frequencies")
+        if freqs is None:
+            continue
+        modes_mix = scen["mixed"].get("per_mode", {})
+        modes_ext = scen["ext_only"].get("per_mode", {})
+        for mode in modes_mix:
+            if mode not in modes_ext:
+                continue
+            post_mix = modes_mix[mode].get("psd_post")
+            post_ext = modes_ext[mode].get("psd_post")
+            if post_mix is None or post_ext is None:
+                continue
+            r_db = _psd_db(post_mix) - _psd_db(post_ext)
+            dash, width = _mode_style(mode)
+            psd_fig.add_trace(go.Scatter(
+                x=freqs, y=r_db, mode="lines",
+                name=f"R — {method}/{mode}",
+                line=dict(color=color_map.get(method, None),
+                          width=width, dash=dash),
+                opacity=0.9,
+            ))
+
+    psd_fig.add_hline(y=0.0, line=dict(color="gray", width=1, dash="dot"))
+
+    f_max = 0.0
+    for r in results:
+        f = r.report.get("frequencies")
+        if f is not None and len(f):
+            f_max = max(f_max, float(np.max(f)))
+    psd_fig.update_xaxes(
+        title_text="Frequency [Hz]",
+        range=[50.0, f_max if f_max > 0 else 6000.0],
+    )
+    psd_fig.update_yaxes(title_text="Residual drone leakage @ target [dB]")
+    psd_fig.update_layout(
+        title="Filterqualität — Cross-Term-Damage-Spektrum (R = post_mixed − post_extonly)",
+        height=600, width=1500,
+        legend=dict(orientation="v", x=1.02, y=1.0),
+    )
+
+    # --- Compose the full HTML page ---
+    intro = []
+    for scenario in ("ext_only", "mixed"):
+        intro.append(f"<li><b>{scenario}</b>:")
+        for r in results:
+            if r.scenario == scenario:
+                intro.append(f"<br>&nbsp;&nbsp;{r.method}: <code>{r.config_path}</code>")
+        intro.append("</li>")
+    intro_html = "<ul>" + "".join(intro) + "</ul>"
+
+    bars_html = fig.to_html(full_html=False, include_plotlyjs="cdn")
+    psd_html = psd_fig.to_html(full_html=False, include_plotlyjs=False)
+    geom_html = _build_mask_geometry_html(results)
+    loc_html = _localization_html_blocks(results)
+    floor_html = _ext_rec_floor_table(results)
+
+    body = f"""<!doctype html>
+<html><head><meta charset="utf-8"><title>Stage-2 methods comparison</title>
+<style>
+  body {{ font-family: sans-serif; max-width: 1600px; margin: 1em auto; padding: 0 1em; }}
+  h1, h2, h3, h4 {{ color: #222; }}
+  pre {{ background: #f5f5f5; padding: 0.5em; overflow-x: auto; font-size: 0.85em; }}
+  code {{ background: #f5f5f5; padding: 0 0.2em; }}
+  table {{ font-size: 0.9em; margin: 0.5em 0; }}
+  th {{ background: #eee; }}
+</style></head><body>
+<h1>Stage-2 methods comparison — DOA vs NNLS</h1>
+
+<h2>1. Setup</h2>
+<p>Four runs: two methods (DOA hemisphere + CLEAN-SC, known-geometry NNLS)
+× two scenarios (external-only methodology reference, mixed drone +
+external).</p>
+{intro_html}
+
+<h2>2. Mask geometry (3D)</h2>
+<p>Spatial layout of the DOA cone masks on the focal sphere. Toggle
+individual masks via the legend; rotate by dragging. Cyan diamonds =
+rotor centers; black dots = mics; red × = configured target point.</p>
+{geom_html}
+
+<h2>3. Localization summary</h2>
+<p>Where each method places the source-map energy. CLEAN-SC variants list
+peak xyz, z-span and the energy fractions near the true target z and the
+drone z. NNLS lists per-band power shares per atom kind.</p>
+{loc_html}
+
+<h2>4. Per-band metrics — bar plots</h2>
+<p>Left column: ext-only (any subtraction is a false positive). Right column:
+mixed (the production case).</p>
+{bars_html}
+
+<h2>5. External-source recovery floor + cross-term damage</h2>
+<p>ext_rec on ext-only is the methodology floor (≈ −26 dB phase-only steering
+bias). ext_rec on mixed shows what the filter actually does. Δ = mixed − ext-only
+is the additional damage caused by the drone-source cross term: large
+positive Δ means the filter leaves drone leakage in the residual; large
+negative Δ means it subtracts external-source energy by mistake.</p>
+{floor_html}
+
+<h2>6. Filterqualität am Target — Cross-Term-Damage-Spektrum</h2>
+<p>Pro Methode/Modus: <code>R(f) = post_mixed_db(f) − post_extonly_db(f)</code>.
+Der ~27 dB Phase-only-Steering-Bias ist in beiden Szenarien gleich und hebt sich
+auf — R(f) zeigt damit direkt die <b>Qualität der räumlichen Filterung</b>:
+wie viel Drohnen-Leakage am target-Punkt nach dem Filter relativ zum
+ext-only-Referenzlauf übrig ist. Die schwarze Referenzkurve <code>L(f) = pre_mixed
+− pre_extonly</code> ist die Drohnen-Leakage am target-Punkt <i>vor</i> jedem
+Filter — also die Aufgabe, die der Filter zu lösen hat.</p>
+<ul>
+<li><code>R(f) ≈ 0 dB</code> → Filter eliminiert Cross-Term perfekt</li>
+<li><code>0 &lt; R(f) &lt; L(f)</code> → Filter unterdrückt Leakage teilweise</li>
+<li><code>R(f) &gt; L(f)</code> → Filter macht's schlimmer als nichts zu tun</li>
+<li><code>R(f) &lt; 0 dB</code> → Übersubtraktion (Target-Energie mit weggenommen)</li>
+</ul>
+{psd_html}
+
+<hr>
+<p><i>Generated by martymicfly.cli.methods_comparison_report</i></p>
+</body></html>
+"""
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(body, encoding="utf-8")
+    log.info("wrote %s (%.1f kB)", out_path, len(body) / 1024)
+
+
+def main(argv: list[str] | None = None) -> int:
+    p = argparse.ArgumentParser(prog="methods-comparison-report")
+    p.add_argument("--out", default="results/methods_comparison_report.html")
+    p.add_argument("--log-level", default="INFO")
+    args = p.parse_args(argv)
+    logging.basicConfig(level=args.log_level, format="%(asctime)s %(levelname)s %(message)s")
+
+    results: list[_MethodResult] = []
+    for scenario, methods in _SCENARIO_GROUPS.items():
+        for method, cfg_path in methods.items():
+            results.append(_run_one(scenario, method, cfg_path))
+
+    _build_report_html(Path(args.out), results)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

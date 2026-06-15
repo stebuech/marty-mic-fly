@@ -1,0 +1,14 @@
+input:
+  drone_source_artifact_h5: /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/drone_source_artifact_gaptip.h5
+  mic_geom_xml: /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/mic_geom.xml
+
+external:
+  kind: noise
+  position_m: [0.0, 0.0, -1.5]
+  amplitude_db: 0.0
+  duration_s: null
+  seed: 0
+
+output:
+  synth_h5: /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/ap2a_synth_mixed_gaptip.h5
+  ground_truth_h5: /media/steffen/Data/Arbeit/MartyMicFly/Messdaten/synth_data/ap2a_synth_mixed_gaptip_gt.h5

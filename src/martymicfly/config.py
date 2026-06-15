@@ -1,0 +1,284 @@
+"""Pydantic models for martymicfly notch-pipeline configuration."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from typing import Annotated, List, Literal, Optional, Union
+
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+
+class InputConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    audio_h5: str
+    mic_geom_xml: str
+    ground_truth_h5: str | None = None
+
+
+class SegmentConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    mode: Literal["middle", "head", "tail", "explicit"]
+    duration: float | None = None
+    start: float | None = None
+    end: float | None = None
+
+    @model_validator(mode="after")
+    def _check_mode_fields(self) -> "SegmentConfig":
+        if self.mode == "explicit":
+            if self.start is None or self.end is None:
+                raise ValueError("segment.mode=explicit requires start and end")
+            if self.end <= self.start:
+                raise ValueError("segment.end must be > segment.start")
+        else:
+            if self.duration is None or self.duration <= 0:
+                raise ValueError(
+                    f"segment.mode={self.mode} requires positive duration"
+                )
+        return self
+
+
+class ChannelsConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    selection: Literal["all", "list"]
+    list: Optional[List[int]] = None
+
+    @model_validator(mode="after")
+    def _check_list(self) -> "ChannelsConfig":
+        if self.selection == "list" and not self.list:
+            raise ValueError("channels.selection=list requires non-empty list")
+        return self
+
+
+class RotorConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    n_blades: int = Field(ge=1)
+    n_harmonics: int = Field(ge=1)
+
+
+class PoleRadiusConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    mode: Literal["scalar", "linear"]
+    value: float | None = None
+    k_cover: float | None = None
+    margin_hz: float | None = None
+    delta_bpf_hz: float | None = None
+    r_min: float = 0.90
+    r_max: float = 0.9995
+
+    @model_validator(mode="after")
+    def _check_mode_fields(self) -> "PoleRadiusConfig":
+        if self.mode == "scalar":
+            if self.value is None or not (0.0 < self.value < 1.0):
+                raise ValueError("pole_radius.scalar requires value in (0, 1)")
+        else:  # linear
+            if self.k_cover is None or self.margin_hz is None:
+                raise ValueError(
+                    "pole_radius.linear requires k_cover and margin_hz"
+                )
+            if not (0.0 < self.r_min < self.r_max < 1.0):
+                raise ValueError("require 0 < r_min < r_max < 1")
+        return self
+
+
+class NotchConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    pole_radius: PoleRadiusConfig
+    multichannel: bool = False
+    block_size: int = Field(default=4096, ge=64)
+
+
+class NotchStageConfig(NotchConfig):
+    """NotchConfig fields + a `kind` discriminator for the stages list."""
+
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["notch"]
+
+
+class CsmConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    nperseg: int = Field(default=512, ge=64)
+    noverlap: int = Field(default=256, ge=0)
+    window: str = "hann"
+    diag_loading_rel: float = 1e-6
+    f_min_hz: float = 200.0
+    f_max_hz: float = 6000.0
+
+
+class DiagnosticGridConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    extent_xy_m: float = 0.5
+    increment_m: float = 0.05
+    # z_min_m / z_max_m: if None, both fall back to platform.rotor_positions[2,0]
+    # at runtime (single z-slice). Setting both to the same finite value also
+    # produces a single slice. Setting z_max_m > z_min_m enables 3D mode.
+    z_min_m: float | None = None
+    z_max_m: float | None = None
+
+    @model_validator(mode="after")
+    def _check_z(self) -> "DiagnosticGridConfig":
+        if (self.z_min_m is None) ^ (self.z_max_m is None):
+            raise ValueError("z_min_m and z_max_m must both be set or both be None")
+        if self.z_min_m is not None and self.z_max_m < self.z_min_m:
+            raise ValueError("z_max_m must be >= z_min_m")
+        return self
+
+
+class BandConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str
+    f_min_hz: float
+    f_max_hz: float
+
+    @model_validator(mode="after")
+    def _check_range(self) -> "BandConfig":
+        if self.f_max_hz <= self.f_min_hz:
+            raise ValueError("f_max_hz must be > f_min_hz")
+        return self
+
+
+class CleanScConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    damp: float = 0.6
+    n_iter: int = Field(default=100, ge=1)
+    r_diag: bool = True
+
+
+class DoaGridConfig(BaseModel):
+    """Hemispheric DOA grid on a focal sphere (Track A).
+
+    The proposal calls for "räumliche Filterung nach der Einfallsrichtung
+    (DOA)" — this grid samples the focal sphere in (azimuth, elevation)
+    instead of a Cartesian volume, so CLEAN-SC discriminates only by
+    direction (the dimension the array can resolve at low frequencies)
+    rather than range (which it cannot at λ ≳ aperture).
+
+    When this config is present on ArrayFilterStageConfig, the stage
+    factory dispatches to DoaArrayFilterStage; mask_mode must then be
+    one of the cone variants (rotor_cone, target_cone, drone_disk).
+    """
+    model_config = ConfigDict(extra="forbid")
+    focal_radius_m: float = Field(default=1.5, gt=0.0)
+    azimuth_step_deg: float = Field(default=10.0, gt=0.0)
+    elevation_step_deg: float = Field(default=10.0, gt=0.0)
+    hemisphere: Literal["lower", "upper", "full"] = "lower"
+    rotor_cone_half_angle_deg: float = Field(default=30.0, gt=0.0, le=180.0)
+    target_cone_half_angle_deg: float = Field(default=30.0, gt=0.0, le=180.0)
+    # drone_disk is an equatorial belt around the rotor plane, built as
+    # the complement of two ±z cones with large opening angles. This
+    # parameter is the half-width of the belt in degrees of elevation
+    # off the rotor plane (so 15° → ±15° band).
+    drone_disk_half_width_deg: float = Field(default=20.0, gt=0.0, le=90.0)
+
+
+class AtomSetConfig(BaseModel):
+    """Konfiguration für den Track-B-Algorithmus ``known_geometry_lsq``.
+
+    Atom-Set: alle Rotorpositionen (aus platform metadata) plus eine
+    Zielposition. Optional ein zusätzliches Identity-Atom für diffuses
+    Rauschen, das nicht durch eine spezifische Position erklärt werden kann.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    drone_atoms: Literal[
+        "rotor_positions",
+        "inter_rotor_midpoints",
+        "subsource_positions",
+    ] = "rotor_positions"
+    target_atom_position_m: tuple[float, float, float] | None = None
+    include_diffuse: bool = False
+    ridge: float = 0.0
+    cond_threshold: float = 1e10
+
+
+class ArrayFilterStageConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["array_filter"]
+    algorithm: Literal["clean_sc", "known_geometry_lsq"] = "clean_sc"
+    csm: CsmConfig = Field(default_factory=CsmConfig)
+    diagnostic_grid: DiagnosticGridConfig = Field(default_factory=DiagnosticGridConfig)
+    bands: list[BandConfig] = Field(default_factory=lambda: [
+        BandConfig(name="low", f_min_hz=200.0, f_max_hz=500.0),
+        BandConfig(name="mid", f_min_hz=500.0, f_max_hz=2000.0),
+        BandConfig(name="high", f_min_hz=2000.0, f_max_hz=6000.0),
+    ])
+    target_point_m: tuple[float, float, float] = (0.0, 0.0, -1.5)
+    rotor_z_tolerance_m: float = 0.05
+    # Subtraction mask:
+    #   - "target_box": preserve a small box around target_point_m, subtract everything else.
+    #     Robust against CLEAN-SC mislocalization (centerline beams, side lobes).
+    #   - "rotor_disc": subtract cells inside the rotor discs ± rotor_z_tolerance_m.
+    #     Direct interpretation but only catches energy CLEAN-SC actually localizes
+    #     onto the rotors.
+    #   - "drone_box": subtract cells inside an axis-aligned box around the drone
+    #     (drone_box_center_m ± drone_box_half_extent_m). Wider than rotor_disc
+    #     and catches the centerline / smearing artefacts that CLEAN-SC produces
+    #     in the drone vicinity.
+    mask_mode: Literal[
+        "target_box", "rotor_disc", "drone_box",
+        "rotor_cone", "target_cone", "drone_disk",
+    ] = "target_box"
+    target_box_half_extent_m: tuple[float, float, float] = (0.15, 0.15, 0.15)
+    drone_box_center_m: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    drone_box_half_extent_m: tuple[float, float, float] = (0.6, 0.6, 0.2)
+    clean_sc: CleanScConfig = Field(default_factory=CleanScConfig)
+    # Track A — DOA hemisphere grid. When set, the stage factory dispatches
+    # to DoaArrayFilterStage and mask_mode must be one of the cone variants.
+    doa_grid: DoaGridConfig | None = None
+    # Track B — known-geometry NNLS. Active when algorithm == 'known_geometry_lsq';
+    # the factory dispatches to KnownAtomsArrayFilterStage. The atoms block is
+    # optional (defaults are reasonable for the AP2-A platform).
+    atoms: AtomSetConfig | None = None
+
+
+StageConfig = Annotated[
+    Union[NotchStageConfig, ArrayFilterStageConfig],
+    Field(discriminator="kind"),
+]
+
+
+class MetricsConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    welch_nperseg: int = Field(ge=64)
+    welch_noverlap: int = Field(ge=0)
+    bandwidth_factor: float = Field(default=1.0, gt=0.0)
+    broadband_low_hz: float | None = None
+
+
+class PlotsConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool = True
+    fmax_hz: float | None = None
+    spectrogram_window: int = Field(ge=64)
+    spectrogram_overlap: int = Field(ge=0)
+    channel_subset: list[int] | None = None
+
+
+class OutputConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    dir: str
+    filtered_h5: str = "filtered.h5"
+    metrics_json: str = "metrics.json"
+    metrics_csv: str = "metrics.csv"
+    plots_subdir: str = "plots"
+    copy_config: bool = True
+
+
+class AppConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    input: InputConfig
+    segment: SegmentConfig
+    channels: ChannelsConfig
+    rotor: RotorConfig
+    stages: list[StageConfig]
+    metrics: MetricsConfig
+    plots: PlotsConfig
+    output: OutputConfig
+
+    def canonical_json(self) -> str:
+        return self.model_dump_json(exclude_none=False)
+
+    def config_hash(self) -> str:
+        payload = json.loads(self.canonical_json())
+        canon = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(canon.encode("utf-8")).hexdigest()[:8]
