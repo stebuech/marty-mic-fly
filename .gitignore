@@ -11,3 +11,5 @@
 __pycache__/
 /dataSources.local.xml
 results/
+# Pico firmware build output
+firmware/*/build/

@@ -51,8 +51,13 @@ def visualize_data(filepath, show_mic_channels=None, figsize=(14, 10)):
     if has_mic_array:
         with h5py.File(filepath, 'r') as f:
             mic_group = f['mic_array']
-            timestamps = mic_group['timestamp'][:]
             audio_data = mic_group['audio_data'][:]
+            if 'timestamp' in mic_group:  # files before format_version 2
+                timestamps = mic_group['timestamp'][:]
+            else:  # sample clock, anchored at the first callback
+                fs = mic_group.attrs['sample_rate']
+                t0 = mic_group['blocks/callback_time'][0] - mic_group.attrs['blocksize'] / fs
+                timestamps = t0 + np.arange(len(audio_data)) / fs
 
             for ch_idx in show_mic_channels:
                 ax = axes[ax_idx]

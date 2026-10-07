@@ -1,0 +1,73 @@
+; PIO programs for the tacho capture board (RP2350, Pico 2).
+;
+; None of these programs keeps time. They only detect events and push a word
+; into their RX FIFO; a DMA channel pair (see capture.c) drains the FIFO and
+; copies TIMER1's raw counter into a ring buffer. All channels therefore share
+; one timebase and the DMA latency is a constant offset.
+
+; ---------------------------------------------------------------------------
+; clkdiv: count rising edges on one input pin and push a word every N edges.
+; The CPU writes N-1 into the TX FIFO before enabling the SM.
+; At 3.072 MHz PDM clock and 150 MHz clk_sys there are ~49 SM cycles per input
+; period; the loop needs 3, the push path 3 more, so no edge is ever missed.
+; ---------------------------------------------------------------------------
+.program clkdiv
+    pull block
+    out y, 32               ; y = N-1 (kept for the lifetime of the SM)
+.wrap_target
+    mov x, y
+count:
+    wait 0 pin 0
+    wait 1 pin 0            ; rising edge
+    jmp x-- count
+    push noblock            ; ISR is empty -> pushes 0; only the event matters
+.wrap
+
+; ---------------------------------------------------------------------------
+; edge_watch: watch IN_COUNT consecutive pins, push the new pin state on any
+; change. Requires RP2350 (MOV x, PINS honours IN_COUNT masking).
+; Idle loop is 2 cycles (13.3 ns at 150 MHz).
+; ---------------------------------------------------------------------------
+.program edge_watch
+    mov y, pins             ; initial state, no event
+.wrap_target
+idle:
+    mov x, pins
+    jmp x!=y changed
+.wrap
+changed:
+    mov isr, x
+    push noblock
+    mov y, x
+    jmp idle
+
+; ---------------------------------------------------------------------------
+; uart_rx: 8N1 receiver, 8 SM cycles per bit (pico-examples uart_rx with the
+; framing-error IRQ made non-blocking). Byte ends up in ISR[31:24].
+; IRQ flag (0 rel) is raised on a framing error / break; CPU counts and clears.
+; ---------------------------------------------------------------------------
+.program uart_rx
+start:
+    wait 0 pin 0            ; start bit
+    set x, 7 [10]           ; to the middle of the first data bit
+bitloop:
+    in pins, 1
+    jmp x-- bitloop [6]
+    jmp pin good_stop
+    irq nowait 0 rel        ; framing error or break
+    wait 1 pin 0            ; wait for idle before resyncing
+    jmp start
+good_stop:
+    push
+
+; ---------------------------------------------------------------------------
+; uart_tx: 8N1 transmitter, 8 SM cycles per bit. Only used by the self-test
+; build to generate fake ESC telemetry.
+; ---------------------------------------------------------------------------
+.program uart_tx
+.side_set 1 opt
+    pull side 1 [7]         ; idle high / stop bit
+    set x, 7 side 0 [7]     ; start bit
+bitloop:
+    out pins, 1
+    jmp x-- bitloop [6]

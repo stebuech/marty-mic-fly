@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**MartyMicFly** is a DFG research project focused on RPM monitoring and ESC (Electronic Speed Controller) telemetry for a "Flying Measurement Microphone" system. The project runs on Raspberry Pi hardware and interfaces with multiple ESCs to monitor motor RPM, control throttle, and synchronize data collection.
+**MartyMicFly** is a DFG research project ("Fliegendes Messmikrofon"). The onboard Raspberry Pi 4 records a 16-channel PDM microphone array (miniDSP MCHStreamer), ESC telemetry and optical rotor tacho pulses; offline analysis (`src/martymicfly`, `analysis/`) separates the drone's own noise. Rotor phase capture concept: `AP1_Rotorphasenerfassung_Umsetzungsplan.md`.
 
 ## Development Commands
 
@@ -13,120 +13,85 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # The project uses uv for dependency management
 uv sync                    # Install/sync dependencies from uv.lock
 uv add <package>           # Add a new dependency
+uv run pytest              # Tests (tests/test_pico_link.py covers the Pico protocol and HDF5 logger)
 ```
+
+On the onboard Pi (`ssh steffen@130.149.163.48`, Debian trixie, PREEMPT_RT kernel) the working Python env is
+`~/miniforge3/envs/rpm` (the repo's `.venv` there is not usable).
 
 ### Running the Main Applications
 ```bash
-# Monitor ESC telemetry (requires hardware connections)
-python rpm_monitoring/kiss_tel_multi_esc_monitor.py
+# Recorder: gate mode (RC switch on GPIO17 starts/stops one file per HIGH phase), mic array + Pico board
+python daq.py
+python daq.py --no-trigger-controlled --output-folder ~/MMFDataLogs/   # manual, Ctrl+C to stop
+python daq.py --help                                                   # all options (BooleanOptional flags)
 
-# With command-line options:
-python rpm_monitoring/kiss_tel_multi_esc_monitor.py \
-  --enable-trigger \
-  --trigger-pin 17 \
-  --data-logging \
-  --output_folder ~/TelemetryLogs/
+# Pico tacho board bench check (rates, jitter, ESC frames, error counters)
+python pico_link.py --monitor 10
 
-# Control ESC throttle via DShot protocol
-python rpm_monitoring/esc_throttle_set.py
+# Throttle control via DShot (separate Python process, pigpio)
+python esc_throttle_set.py
+python throttle_rpm_mapping.py         # calibration, telemetry via Pico by default
 ```
+
+Pico firmware build/flash: `firmware/tacho_pico/README.md`.
 
 ## Architecture
 
-### Hardware Interface Layer
+### Hardware (Rev. G3 shield on the Pi 4)
 
-The system interfaces with Raspberry Pi GPIO using the **pigpio** library (migrated from RPi.GPIO). Key hardware interfaces:
+- **Pico 2 (RP2350) tacho board** on `/dev/ttyAMA5` (Pi GPIO12/13 = UART5, 921600 8N1; Pico UART0 GP0/GP1).
+  Pico GP2 = PDM_CLK from the MCHStreamer, GP3–GP8 = TACHO1–6, GP9–GP14 = ESC telemetry TEL1–6 (KISS, 115200).
+  ESC telemetry is **no longer wired to Pi UARTs**; `/dev/ttyAMA0/2/3/4` only matter for older boards
+  (`--telemetry-source uart`).
+- **Gate/trigger** from the Pixhawk on Pi GPIO17 (RC PWM, decoded by pigpio).
+- **DShot outputs** on Pi GPIO18, 19, 20, 21, 16, 26 (`esc_throttle_set.py`, pigpio waves). Motor n = DSHOT n = TEL n = TACHO n.
+  Pin defaults live in `hw_config.py`; scripts take `--motors 4` (quadcopter, current default) or `--motors 6` (hexacopter).
+- The heartbeat loopback (GPIO22 → 23) was removed in Rev. G3; the signal monitor/heartbeat options remain for old boards.
+- `pigpiod` must run (`sudo pigpiod`); `dtoverlay=uart5` (plus uart2–4 for old boards) in `/boot/firmware/config.txt`.
 
-- **Serial Communication**: Reads KISS telemetry protocol from ESCs via UART (default: /dev/ttyAMA0-4)
-- **GPIO Interrupts**: Hardware-triggered event capture for synchronization (default: GPIO 17)
-- **DShot Protocol**: Bidirectional digital motor control protocol (DShot150/300/600)
+### Pico firmware (`firmware/tacho_pico`)
 
-### Core Components
+PIO only detects events; DMA channel pairs copy the event word and TIMER1's raw counter (counting clk_sys, 150 MHz)
+into ring buffers, so all channels share one timebase with constant latency. The CPU extends timestamps to 64 bit
+(`ts_extend`, stateless) and frames packets. Protocol source of truth: `src/protocol.h`; host side
+`pico_link.py` must match (`PROTO_VERSION`). A self-test build generates all signals on spare pins.
 
-**1. Telemetry Monitoring (`kiss_tel_multi_esc_monitor.py`)**
+### Host side
 
-Multi-threaded architecture for real-time ESC monitoring:
+- `pico_link.py`: `PicoLink` reader thread + frame parser, `KissStream` (KISS reassembly from the Pico's byte chunks),
+  `ClockMap` (Pico ticks → Pi time via PING/PONG), `PicoESCChannel` (same interface as `daq.ESCTelemtry`).
+- `daq.py`: `Timer` (time.perf_counter), `SignalMonitor` (pigpio gate/edges, logs pigpio ticks), `ESCTelemtry`
+  (legacy UART), `MicArray` (sounddevice callback: copy + per-block record only), `HDF5Logger` (single writer
+  thread), `DAQ` (manual and gate mode).
 
-- `Timer`: High-precision timing using `time.perf_counter()` for synchronization
-- `TriggerMonitor`: Hardware interrupt-based trigger event capture via pigpio callbacks
-- `KISSTelemtryMonitor`: Serial protocol parser for KISS telemetry (temp, voltage, current, RPM)
-  - Implements CRC8 checksum validation
-  - Automatic packet synchronization
-  - Per-ESC thread with circular buffer (`deque`)
-- `TelemetryHDF5Logger`: Streaming HDF5 writer with periodic flushing
-  - Extendable datasets with gzip compression
-  - Separate groups for timing, triggers, and per-ESC telemetry
-- `MultiESCMonitor`: Orchestrates multiple ESC monitors with optional trigger and logging
+### Data Storage (HDF5, `format_version` 2)
 
-**Data Flow**: Serial Port → Buffer → CRC Validation → Thread-safe Deque → Periodic HDF5 Flush
+```
+/timing            attrs start_time_wall, start_time_perf ("timestamp" columns = s since start_time_perf)
+/mic_array/audio_data (N, 16), /mic_array/blocks/{first_frame, frames, adc_time, current_time, callback_time, status}
+/esc_telemetry/ESCn/{timestamp, pico_ticks, temperature, voltage, current, consumption, erpm, rpm}
+/pico/clk/{seq, ticks}            one event per clk_div PDM_CLK edges (= clk_div/64 samples)
+/pico/tacho/{seq, ticks, state, changed}
+/pico/ping/{id, pi_send, pi_recv, pico_ticks}, /pico/status/*, /pico/tel_chunks/*, attrs tick_hz, clk_div, fw
+/gate/{timestamp, state, tick}    decoded RC switch;  /trigger/* log-pin edges (old boards)
+```
 
-**2. ESC Control (`esc_throttle_set.py`)**
-
-DShot protocol implementation for ESC throttle control:
-
-- `DShot`: Single ESC controller with frame generation and CRC
-  - Generates precisely-timed waveforms using pigpio waves
-  - Supports throttle range (48-2047) and special commands (0-47)
-- `MultiESC`: Synchronized control of multiple ESCs
-  - Parallel arming/disarming
-  - Individual or collective throttle setting
-
-**Critical Timing**: DShot600 requires 1.67μs bit timing; uses pigpio hardware-timed pulses
+Per-sample mic timestamps are no longer stored; the sample clock plus `/pico/clk` is the time reference.
+RPM: `rpm = erpm / pole_pairs` (default 12 pole pairs; `erpm` is stored raw).
 
 ### Threading Model
 
-- **ESC Monitor Threads**: One per ESC, continuously reads serial data using `select()` with 0.1s timeout
-- **Logging Thread**: Periodic flush to HDF5 (default: 1.0s interval)
-- **Main Thread**: User interface and coordination
-- **Trigger Callbacks**: Hardware interrupt context (pigpio callback)
-
-All threads share a single `Timer` instance for synchronized timestamps. Thread-safe access via `threading.Lock`.
-
-### KISS Telemetry Protocol
-
-10-byte packet structure per KISS specification:
-- Byte 0: Temperature (°C)
-- Bytes 1-2: Voltage (×0.01V, big-endian)
-- Bytes 3-4: Current (×0.01A, big-endian)
-- Bytes 5-6: Consumption (mAh, big-endian)
-- Bytes 7-8: RPM (×100 × 2 / pole_pairs, big-endian)
-- Byte 9: CRC8 checksum
-
-Default configuration: 14 pole pairs, 115200 baud
-
-### Data Storage
-
-HDF5 hierarchical structure:
-```
-/timing
-  - attrs: start_time_wall, start_time_perf
-/trigger (optional)
-  - timestamp[]: float64 array
-  - state[]: int8 array
-/esc_telemetry
-  /ESC1, /ESC2, etc.
-    - timestamp[], temperature[], voltage[], current[], consumption[], rpm[]
-    - attrs: port, total_samples, avg_sample_rate, sample_rate_std
-```
-
-## Hardware Configuration
-
-Default serial ports: `/dev/ttyAMA0`, `/dev/ttyAMA2`, `/dev/ttyAMA3`, `/dev/ttyAMA4`
-Default trigger pin: GPIO 17 (BCM numbering)
-Default DShot pins: GPIO 18, 19, 20, 21
-
-Requires `pigpiod` daemon running:
-```bash
-sudo pigpiod  # Start pigpio daemon before running scripts
-```
+Pico reader + ping thread, PortAudio callback (no I/O), HDF5 writer thread (the only thread touching the file),
+gate poll thread, pigpio callbacks. All Pi-side timestamps use one `Timer` (CLOCK_MONOTONIC).
 
 ## Dependencies
 
 Core dependencies (from pyproject.toml):
 - `pigpio`: Hardware GPIO control with precise timing
-- `pyserial`: Serial communication for KISS telemetry
+- `pyserial`: Serial communication
 - `h5py`: HDF5 data logging
 - `numpy`: Numerical operations
-- `ipython`: Interactive development
+- `sounddevice`: MCHStreamer capture
 
-Python requirement: >=3.13
+Python requirement: >=3.13 (the Pi env runs 3.12, which works for the acquisition scripts)

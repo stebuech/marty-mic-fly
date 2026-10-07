@@ -8,6 +8,8 @@ import csv
 import numpy as np
 from scipy.interpolate import interp1d
 
+from hw_config import dshot_pins
+
 #TODO: Setting CPU affinity is only needed when DAQ is used in parallel, due to sounddevice/pigpio interferences. Then DAQ must live in a
 # different python instance!! Also requires to start pigpiod with sudo taskset -c 0 pigpiod (set cpu affinity to cpu 0)
 os.sched_setaffinity(0, {0})
@@ -329,7 +331,7 @@ class MultiESCControler:
             ValueError: If CSV missing required columns or HDF5 missing esc_telemetry group
 
         Example:
-            >>> multi_esc = MultiESCControler([18, 19, 20, 21], dshot_speed=300)
+            >>> multi_esc = MultiESCControler(dshot_pins(4), dshot_speed=300)
             >>> multi_esc.start()
             >>> multi_esc.replay(
             ...     '/path/to/telemetry_data.h5',
@@ -597,8 +599,8 @@ class MultiESCControler:
             esc.cleanup()
 
 def run_test():
-    # Define GPIO pins for 4 ESCs
-    ESC_PINS = [18, 19, 20, 21]
+    # Quadcopter: DSHOT1-4 (dshot_pins(6) for the hexacopter)
+    ESC_PINS = dshot_pins(4)
     max_throttle = 20
     multi_esc = None
     try:

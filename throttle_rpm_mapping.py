@@ -30,6 +30,8 @@ import numpy as np
 # Local
 from esc_throttle_set import MultiESCControler
 from daq import Timer, ESCTelemtry
+from pico_link import PicoLink
+from hw_config import dshot_pins, LEGACY_ESC_PORTS, PICO_PORT
 
 # CONSTANTS
 MAX_THROTTLE_SAFETY_LIMIT = 55  # Hard-coded safety limit (percent)
@@ -49,18 +51,37 @@ def parse_arguments():
 
     # Hardware configuration
     parser.add_argument(
+        '--motors',
+        type=int,
+        choices=[4, 6],
+        default=4,
+        help='Number of motors: 4 = quadcopter (DSHOT1-4), 6 = hexacopter (DSHOT1-6)'
+    )
+    parser.add_argument(
         '--esc-pins',
         type=int,
         nargs='+',
-        default=[18, 19, 20, 21],
-        help='GPIO pins for ESCs (BCM numbering)'
+        default=None,
+        help='GPIO pins for ESCs (BCM numbering); default: first --motors of hw_config.DSHOT_PINS'
     )
     parser.add_argument(
         '--serial-ports',
         type=str,
         nargs='+',
-        default=['/dev/ttyAMA0', '/dev/ttyAMA4', '/dev/ttyAMA2', '/dev/ttyAMA3'],
-        help='Serial ports for ESC telemetry'
+        default=LEGACY_ESC_PORTS,
+        help='Serial ports for ESC telemetry (only with --telemetry-source uart)'
+    )
+    parser.add_argument(
+        '--telemetry-source',
+        choices=['pico', 'uart'],
+        default='pico',
+        help='pico: ESC telemetry via the tacho board (Rev. G3, TEL1-6); uart: Pi UARTs in --serial-ports'
+    )
+    parser.add_argument(
+        '--pico-port',
+        type=str,
+        default=PICO_PORT,
+        help='Serial port of the Pico tacho board'
     )
     parser.add_argument(
         '--dshot-speed',
@@ -79,7 +100,8 @@ def parse_arguments():
         '--pole-pairs',
         type=int,
         default=24,
-        help='Motor pole pair count for RPM calculation'
+        help='Number of motor magnet POLES (rpm = eRPM * 2 / value; 24 = 12 pole pairs). '
+             'Name kept for compatibility'
     )
 
     # Calibration configuration
@@ -118,12 +140,14 @@ def parse_arguments():
     )
 
     args = parser.parse_args()
+    if args.esc_pins is None:
+        args.esc_pins = dshot_pins(args.motors)
 
     # Validation
     if args.max_throttle > MAX_THROTTLE_SAFETY_LIMIT:
         parser.error(f"Maximum throttle cannot exceed {MAX_THROTTLE_SAFETY_LIMIT}% for safety")
 
-    if len(args.esc_pins) != len(args.serial_ports):
+    if args.telemetry_source == 'uart' and len(args.esc_pins) != len(args.serial_ports):
         parser.error("Number of ESC pins must match number of serial ports")
 
     if args.max_throttle % args.throttle_step != 0:
@@ -132,7 +156,8 @@ def parse_arguments():
     return args
 
 
-def initialize_hardware(esc_pins, serial_ports, dshot_speed, baudrate, pole_pairs):
+def initialize_hardware(esc_pins, serial_ports, dshot_speed, baudrate, pole_pairs,
+                        telemetry_source='pico', pico_port='/dev/ttyAMA5'):
     """
     Initialize ESC controllers and telemetry monitors
 
@@ -154,6 +179,17 @@ def initialize_hardware(esc_pins, serial_ports, dshot_speed, baudrate, pole_pair
     multi_esc = MultiESCControler(esc_pins, dshot_speed=dshot_speed)
     multi_esc.start()
     print("  ESC command stream started")
+
+    if telemetry_source == 'pico':
+        # pole_pairs is passed on as ESCTelemtry's pole_count (number of poles), see --pole-pairs
+        link = PicoLink(pico_port, timer=timer, pole_pairs=pole_pairs / 2)
+        link.start()
+        info = link.wait_for_info()
+        print(f"\nESC telemetry via Pico tacho board on {pico_port}: "
+              f"{'fw ' + info['fw'] if info else 'NO ANSWER'}")
+        esc_monitors = link.escs[:len(esc_pins)]
+        print("=" * 70 + "\n")
+        return timer, multi_esc, esc_monitors, []
 
     # Create telemetry monitors
     print(f"\nInitializing ESC telemetry monitors...")
@@ -664,6 +700,9 @@ def cleanup_hardware(multi_esc, esc_monitors):
             print("Stopping telemetry monitors...")
             for esc in esc_monitors:
                 esc.stop()
+            link = getattr(esc_monitors[0], 'link', None)
+            if link is not None:
+                link.stop()
     except Exception as e:
         print(f"⚠ Error during telemetry cleanup: {e}")
 
@@ -701,7 +740,9 @@ def main():
             args.serial_ports,
             args.dshot_speed,
             args.baudrate,
-            args.pole_pairs
+            args.pole_pairs,
+            args.telemetry_source,
+            args.pico_port
         )
 
         # Validate connections

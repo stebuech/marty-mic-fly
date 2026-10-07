@@ -35,6 +35,7 @@ import threading
 from pathlib import Path
 from esc_throttle_set import MultiESCControler
 from daq import DAQ
+from hw_config import dshot_pins, LEGACY_ESC_PORTS
 
 try:
     import sounddevice as sd
@@ -86,11 +87,18 @@ def parse_arguments():
 
     # ESC configuration
     parser.add_argument(
+        '--motors',
+        type=int,
+        choices=[4, 6],
+        default=4,
+        help='Number of motors: 4 = quadcopter (DSHOT1-4), 6 = hexacopter (DSHOT1-6)'
+    )
+    parser.add_argument(
         '--esc-pins',
         type=int,
         nargs='+',
-        default=[18, 19, 20, 21],
-        help='GPIO pins for ESCs (BCM numbering)'
+        default=None,
+        help='GPIO pins for ESCs (BCM numbering); default: first --motors of hw_config.DSHOT_PINS'
     )
     parser.add_argument(
         '--dshot-speed',
@@ -108,11 +116,17 @@ def parse_arguments():
 
     # DAQ configuration
     parser.add_argument(
+        '--telemetry-source',
+        choices=['pico', 'uart'],
+        default='pico',
+        help='pico: ESC telemetry via the tacho board (Rev. G3); uart: Pi UARTs in --esc-ports (old boards)'
+    )
+    parser.add_argument(
         '--esc-ports',
         type=str,
         nargs='+',
-        default=['/dev/ttyAMA0', '/dev/ttyAMA4', '/dev/ttyAMA2', '/dev/ttyAMA3'],
-        help='Serial ports for ESC telemetry'
+        default=LEGACY_ESC_PORTS,
+        help='Serial ports for ESC telemetry (only with --telemetry-source uart)'
     )
     parser.add_argument(
         '--baudrate',
@@ -144,6 +158,12 @@ def parse_arguments():
         type=str,
         default='/home/steffen/MMFDataLogs/replay_recordings',
         help='Output folder for recordings'
+    )
+    parser.add_argument(
+        '--heartbeat',
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help='Heartbeat on --heartbeat-pin, logged via --log-pin (needs the GPIO22->23 loopback of pre-Rev. G3 boards)'
     )
     parser.add_argument(
         '--heartbeat-pin',
@@ -202,6 +222,8 @@ def parse_arguments():
     )
 
     args = parser.parse_args()
+    if args.esc_pins is None:
+        args.esc_pins = dshot_pins(args.motors)
 
     # Validation
     if not os.path.exists(args.h5_file):
@@ -379,14 +401,16 @@ def main():
             mic_array_sample_rate=args.mic_sample_rate,
             # ESC telemetry
             enable_telemetry=True,
+            telemetry_source=args.telemetry_source,
+            n_motors=len(args.esc_pins),
             esc_ports=args.esc_ports,
             baudrate=args.baudrate,
-            # Signal monitoring with heartbeat
-            enable_signal_monitor=True,
+            # Signal monitoring with heartbeat (pre-Rev. G3 boards only)
+            enable_signal_monitor=args.heartbeat,
             listen_pin=None,  # No trigger control
             output_pin=args.heartbeat_pin,
             log_pin=args.log_pin,  # Monitor heartbeat output for logging
-            heartbeat=True,
+            heartbeat=args.heartbeat,
             heartbeat_interval=args.heartbeat_interval,
             # Control
             trigger_controlled=False,  # Manual mode
@@ -397,11 +421,11 @@ def main():
         )
 
         print(f"✓ DAQ initialized")
-        print(f"  - ESC telemetry: {len(args.esc_ports)} channels")
+        print(f"  - ESC telemetry ({args.telemetry_source}): {len(daq.escs)} channels")
         print(f"  - Mic array: {'enabled' if args.enable_mic_array else 'disabled'}")
-        print(f"  - Heartbeat pin: GPIO {args.heartbeat_pin}")
-        print(f"  - Log pin: {'GPIO ' + str(args.log_pin) if args.log_pin else 'disabled (no trigger logging)'}")
-        print(f"  - Heartbeat interval: {args.heartbeat_interval}s")
+        if args.heartbeat:
+            print(f"  - Heartbeat pin: GPIO {args.heartbeat_pin}, log pin GPIO {args.log_pin}, "
+                  f"interval {args.heartbeat_interval}s")
         print("=" * 70 + "\n")
 
         # ========================================
