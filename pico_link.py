@@ -18,7 +18,7 @@ from collections import deque
 
 import numpy as np
 
-PROTO_VERSION = 1
+PROTO_VERSION = 2
 SYNC = b'\xA5\x5A'
 FRAME_OVERHEAD = 6
 FRAME_MAX_PAYLOAD = 128
@@ -29,12 +29,18 @@ PKT_CLK = 0x10
 PKT_TACHO = 0x11
 PKT_TEL = 0x12
 PKT_PONG = 0x13
+PKT_TACHO_BATCH = 0x14
 
 CMD_PING = 0x80
 CMD_GET_INFO = 0x81
 CMD_SET_CLKDIV = 0x82
+CMD_SET_TACHO_EDGES = 0x83
 CMD_BOOTSEL = 0x8F
 BOOTSEL_MAGIC = 0xB0075E1F
+TACHO_EDGES = {'both': 0, 'rising': 1}
+
+INFO_FLAG_SELFTEST = 0x01
+INFO_FLAG_RISING_ONLY = 0x02
 
 TEL_FLAG_FRAMING_ERR = 0x01
 TEL_FLAG_OVERFLOW = 0x02
@@ -144,6 +150,7 @@ _INFO = struct.Struct('<HIIBBIBQ16s')
 _STATUS_HEAD = struct.Struct('<QQIIIIII')
 _CLK = struct.Struct('<IQ')
 _TACHO = struct.Struct('<IQBB')
+_TACHO_BATCH_HEAD = struct.Struct('<IQB')
 _TEL_HEAD = struct.Struct('<BBIQB')
 _PONG = struct.Struct('<IQ')
 
@@ -151,7 +158,8 @@ _PONG = struct.Struct('<IQ')
 def decode_info(p):
     proto, tick_hz, clk_div, n_tacho, n_tel, tel_baud, flags, t_now, fw = _INFO.unpack_from(p)
     return dict(proto=proto, tick_hz=tick_hz, clk_div=clk_div, n_tacho=n_tacho, n_tel=n_tel,
-                tel_baud=tel_baud, selftest=bool(flags & 1), t_now=t_now,
+                tel_baud=tel_baud, selftest=bool(flags & INFO_FLAG_SELFTEST),
+                tacho_rising_only=bool(flags & INFO_FLAG_RISING_ONLY), t_now=t_now,
                 fw=fw.split(b'\0', 1)[0].decode(errors='replace'))
 
 
@@ -166,6 +174,19 @@ def decode_status(p):
                 link_drops=link_drops, rx_crc_errors=rx_crc_errors, tacho_stalls=tacho_stalls,
                 loop_max_us=loop_max_us, tel_bytes=tel_bytes, tel_framing=tel_framing,
                 tel_overflow=tel_overflow)
+
+
+def decode_tacho_batch(p):
+    """PKT_TACHO_BATCH -> list of (seq, ticks, state, changed)"""
+    seq, t, n = _TACHO_BATCH_HEAD.unpack_from(p)
+    out = []
+    o = _TACHO_BATCH_HEAD.size
+    for i in range(n):
+        state, changed, d0, d1, d2 = p[o:o + 5]
+        t += d0 | (d1 << 8) | (d2 << 16)
+        out.append(((seq + i) & 0xFFFFFFFF, t, state, changed))
+        o += 5
+    return out
 
 
 def decode_tel(p):
@@ -355,7 +376,8 @@ class PicoLink:
 
     Buffers (deques of tuples, drained by the logger with pop_*):
       clk:    (seq, ticks)
-      tacho:  (seq, ticks, state, changed)
+      tacho:  (seq, ticks, state, changed)     changed = reported edges (only rising ones in
+                                               rising-edge mode, see set_tacho_edges)
       tel:    (ch, seq, ticks, flags, n_bytes)    raw chunk index, for diagnostics
       status: (pi_time, status dict)
       ping:   (id, pi_send, pi_recv, pico_ticks)
@@ -442,6 +464,17 @@ class PicoLink:
         self.send(CMD_SET_CLKDIV, struct.pack('<I', div))
         return self.wait_for_info()
 
+    def set_tacho_edges(self, mode):
+        """'rising' (firmware default, 17 marks x 4-6 rotors fit the link) or 'both'
+        (needed for duty cycle / sensor adjustment). Returns INFO, or None if the
+        firmware predates protocol 2 and always sends both edges."""
+        self.info_event.clear()
+        self.send(CMD_SET_TACHO_EDGES, bytes([TACHO_EDGES[mode]]))
+        info = self.wait_for_info()
+        if info is None or info['proto'] < 2:
+            return None
+        return info
+
     def reboot_to_bootloader(self):
         self.send(CMD_BOOTSEL, struct.pack('<I', BOOTSEL_MAGIC))
 
@@ -505,6 +538,16 @@ class PicoLink:
                 self.tacho_seq_gaps += 1
             self.last_tacho_seq = seq
             self._append(self.tacho, (seq, t, state, changed), self.overruns, 'tacho')
+        elif pkt_type == PKT_TACHO_BATCH:
+            events = decode_tacho_batch(p)
+            if not events:
+                return
+            seq = events[0][0]
+            if self.last_tacho_seq is not None and seq != (self.last_tacho_seq + 1) & 0xFFFFFFFF:
+                self.tacho_seq_gaps += 1
+            self.last_tacho_seq = events[-1][0]
+            for ev in events:
+                self._append(self.tacho, ev, self.overruns, 'tacho')
         elif pkt_type == PKT_TEL:
             ch, flags, seq, t_first, data = decode_tel(p)
             if ch >= N_TEL:

@@ -72,7 +72,7 @@ into ring buffers, so all channels share one timebase with constant latency. The
 /mic_array/audio_data (N, 16), /mic_array/blocks/{first_frame, frames, adc_time, current_time, callback_time, status}
 /esc_telemetry/ESCn/{timestamp, pico_ticks, temperature, voltage, current, consumption, erpm, rpm}
 /pico/clk/{seq, ticks}            one event per clk_div PDM_CLK edges (= clk_div/64 samples)
-/pico/tacho/{seq, ticks, state, changed}
+/pico/tacho/{seq, ticks, state, changed}   rising edges only by default (attr tacho_rising_only; daq.py --tacho-edges both)
 /pico/ping/{id, pi_send, pi_recv, pico_ticks}, /pico/status/*, /pico/tel_chunks/*, attrs tick_hz, clk_div, fw
 /gate/{timestamp, state, tick}    decoded RC switch;  /trigger/* log-pin edges (old boards)
 ```

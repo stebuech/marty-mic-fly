@@ -37,12 +37,15 @@ def test_python_decoder_matches_c_encoder(tmp_path):
     lines = subprocess.run([str(exe), '--emit'], check=True, capture_output=True, text=True).stdout.split()
     frames = pl.FrameParser().feed(b''.join(bytes.fromhex(x) for x in lines))
     types = [t for t, _ in frames]
-    assert types == [pl.PKT_CLK, pl.PKT_TACHO, pl.PKT_TEL, pl.PKT_PONG]
+    assert types == [pl.PKT_CLK, pl.PKT_TACHO, pl.PKT_TEL, pl.PKT_PONG, pl.PKT_TACHO_BATCH]
     assert pl._CLK.unpack(frames[0][1]) == (7, 0x123456789ABC)
     assert pl._TACHO.unpack(frames[1][1]) == (42, 0x1122334455, 0x15, 0x04)
     ch, flags, seq, t_first, data = pl.decode_tel(frames[2][1])
     assert (ch, flags, seq, t_first, len(data)) == (2, 0, 9, 5000, 10)
     assert pl._PONG.unpack(frames[3][1]) == (0xDEADBEEF, 987654321)
+    t0 = 0x200000000
+    assert pl.decode_tacho_batch(frames[4][1]) == [(500, t0, 0x01, 0x01), (501, t0 + 12345, 0x03, 0x02),
+                                                   (502, t0 + 12345 + 0xFFFFFF, 0x13, 0x10)]
 
 
 def test_frame_parser_resync_and_split():
@@ -161,3 +164,19 @@ def test_hdf5_logger_layout(tmp_path):
         assert g['pico_ticks'].dtype == np.uint64 and len(g['rpm']) == 3
         assert g.attrs['source'] == 'pico' and g.attrs['pole_pairs'] == 12
         assert 'start_time_perf' in f['timing'].attrs
+
+
+def test_tacho_batches_into_event_buffer():
+    def batch(seq, t, entries):
+        p = struct.pack('<IQB', seq, t, len(entries))
+        for state, changed, dt in entries:
+            p += bytes([state, changed]) + dt.to_bytes(3, 'little')
+        return p
+
+    link = pl.PicoLink(port=None)
+    link._dispatch(pl.PKT_TACHO_BATCH, batch(10, 1000, [(1, 1, 0), (3, 2, 50)]), 0.0)
+    link._dispatch(pl.PKT_TACHO_BATCH, batch(12, 2000, [(1, 1, 0)]), 0.0)
+    assert link.tacho_seq_gaps == 0
+    link._dispatch(pl.PKT_TACHO_BATCH, batch(20, 3000, [(1, 1, 0)]), 0.0)  # 13..19 lost
+    assert link.tacho_seq_gaps == 1
+    assert link.pop_tacho() == [(10, 1000, 1, 1), (11, 1050, 3, 2), (12, 2000, 1, 1), (20, 3000, 1, 1)]

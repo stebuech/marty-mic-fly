@@ -105,3 +105,33 @@ size_t tel_chunk_payload(const tel_chunk_t *c, uint8_t ch, uint8_t *out) {
     memcpy(p, c->data, c->n);
     return (size_t)(p - out) + c->n;
 }
+
+bool tacho_batch_needs_flush(const tacho_batch_t *b, uint64_t t) {
+    if (b->n == 0) return false;
+    return b->n >= TACHO_BATCH_MAX || t - b->t_last > TACHO_DT_MAX;
+}
+
+void tacho_batch_add(tacho_batch_t *b, uint32_t seq, uint64_t t, uint8_t state, uint8_t changed) {
+    if (b->n >= TACHO_BATCH_MAX) return;  // caller flushes first
+    uint32_t dt = 0;
+    if (b->n == 0) {
+        uint8_t *p = put_u32(b->payload, seq);
+        put_u64(p, t);
+        b->t_first = t;
+    } else {
+        dt = (uint32_t)(t - b->t_last);
+    }
+    uint8_t *e = b->payload + TACHO_BATCH_HEAD + (size_t)b->n * TACHO_BATCH_ENTRY;
+    e[0] = state;
+    e[1] = changed;
+    e[2] = (uint8_t)dt;
+    e[3] = (uint8_t)(dt >> 8);
+    e[4] = (uint8_t)(dt >> 16);
+    b->n++;
+    b->payload[12] = b->n;
+    b->t_last = t;
+}
+
+size_t tacho_batch_len(const tacho_batch_t *b) {
+    return b->n ? TACHO_BATCH_HEAD + (size_t)b->n * TACHO_BATCH_ENTRY : 0;
+}

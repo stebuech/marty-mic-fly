@@ -75,4 +75,28 @@ void tel_chunk_reset(tel_chunk_t *c);
 // Encode the chunk as a PKT_TEL payload; returns payload length.
 size_t tel_chunk_payload(const tel_chunk_t *c, uint8_t ch, uint8_t *out);
 
+// Edges to report for a new pin state: all changed pins, or in rising-edge
+// mode only those that went high. 0 means the event is not sent.
+static inline uint8_t tacho_report_mask(uint8_t state, uint8_t prev, bool rising_only) {
+    uint8_t changed = (uint8_t)(state ^ prev);
+    return rising_only ? (uint8_t)(changed & state) : changed;
+}
+
+// Tacho batcher: collects events into one PKT_TACHO_BATCH payload (protocol.h).
+_Static_assert(TACHO_BATCH_HEAD + TACHO_BATCH_MAX * TACHO_BATCH_ENTRY <= FRAME_MAX_PAYLOAD,
+               "tacho batch exceeds frame payload");
+typedef struct {
+    uint8_t payload[TACHO_BATCH_HEAD + TACHO_BATCH_MAX * TACHO_BATCH_ENTRY];
+    uint8_t n;
+    uint64_t t_first;
+    uint64_t t_last;
+} tacho_batch_t;
+
+// True when the batch must be emitted (and reset) *before* adding an event at t.
+bool tacho_batch_needs_flush(const tacho_batch_t *b, uint64_t t);
+void tacho_batch_add(tacho_batch_t *b, uint32_t seq, uint64_t t, uint8_t state, uint8_t changed);
+// Payload length of the current batch (0 if empty).
+size_t tacho_batch_len(const tacho_batch_t *b);
+static inline void tacho_batch_reset(tacho_batch_t *b) { b->n = 0; }
+
 #endif

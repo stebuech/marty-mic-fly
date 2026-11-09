@@ -796,7 +796,8 @@ class HDF5Logger:
             g.attrs['port'] = pico.port
             g.attrs['description'] = ('Pico tacho board events in Pico ticks (tick_hz). clk: one event every '
                                       'clk_div rising PDM_CLK edges (= clk_div/64 audio samples). tacho: pin state '
-                                      'after the edge, changed = XOR to the previous state, bit n = TACHO n+1.')
+                                      'after the edge, changed = reported edges, bit n = TACHO n+1; with '
+                                      'tacho_rising_only only rising edges are recorded.')
         if self.write_error:
             self.file.attrs['write_error'] = self.write_error
 
@@ -831,6 +832,7 @@ class DAQ:
                  enable_pico=None,
                  pico_port=PICO_PORT,
                  pico_baudrate=PICO_BAUDRATE,
+                 tacho_edges='rising',
                  # Signal monitoring
                  enable_signal_monitor=False,
                  listen_pin=None,
@@ -859,6 +861,8 @@ class DAQ:
                 4 = quadcopter, 6 = hexacopter
             pole_pairs: motor pole pairs, rpm = eRPM / pole_pairs
             enable_pico: log Pico tacho/clock events; default: True if telemetry_source == 'pico'
+            tacho_edges: 'rising' (default; keeps 4-6 rotors with many marks within the link
+                rate) or 'both' (duty cycle, sensor checks)
             mic_array_latency: PortAudio latency setting
             audio_compression: HDF5 filter for audio (None, 'lzf', 'gzip'); None keeps
                 the writer cheap enough not to starve the audio callback
@@ -878,6 +882,7 @@ class DAQ:
         self.pico = None
         if self.enable_pico or (self.enable_esc and telemetry_source == 'pico'):
             self.pico = PicoLink(pico_port, pico_baudrate, timer=self.timer, pole_pairs=pole_pairs)
+        self.tacho_edges = tacho_edges
 
         self.escs = []
         if self.enable_esc:
@@ -946,6 +951,11 @@ class DAQ:
                 mode = ' SELFTEST BUILD' if info['selftest'] else ''
                 print(f"Pico link up: fw {info['fw']}{mode}, tick {info['tick_hz'] / 1e6:.1f} MHz, "
                       f"clk_div {info['clk_div']}")
+                if self.pico.set_tacho_edges(self.tacho_edges) is None:
+                    print(f"WARNING: Pico firmware (protocol {info['proto']}) cannot select tacho edges, "
+                          f"it sends both - update the firmware for more than one or two rotors")
+                else:
+                    print(f"Pico tacho edges: {self.tacho_edges}")
         self.sources_open = True
 
     def _close_sources(self):
@@ -1205,6 +1215,8 @@ def main():
                    help='log Pico tacho/clock events (default: on with --telemetry-source pico)')
     g.add_argument('--pico-port', default=PICO_PORT)
     g.add_argument('--pico-baudrate', type=int, default=PICO_BAUDRATE)
+    g.add_argument('--tacho-edges', choices=['rising', 'both'], default='rising',
+                   help='tacho edges the Pico sends; both doubles the link load (duty cycle, sensor checks)')
 
     g = parser.add_argument_group('signal monitor (heartbeat / edge logging, pre-Rev. G3 boards)')
     g.add_argument('--signal-monitor', action=BOA, default=False)
@@ -1262,6 +1274,7 @@ def main():
         enable_pico=args.pico,
         pico_port=args.pico_port,
         pico_baudrate=args.pico_baudrate,
+        tacho_edges=args.tacho_edges,
         enable_signal_monitor=args.signal_monitor,
         listen_pin=args.listen_pin,
         output_pin=args.output_pin,

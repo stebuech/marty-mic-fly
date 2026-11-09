@@ -1,7 +1,8 @@
 // Tacho capture board firmware (Raspberry Pi Pico 2 / RP2350), Rev. G3 board.
 //
 //   GP2       PDM_CLK (MCHStreamer, via U5)  -> clkdiv SM, event every clk_div rising edges
-//   GP3..GP8  TACHO_1..6 (via U1-U4,U6,U7)   -> edge_watch SM, event on any edge
+//   GP3..GP8  TACHO_1..6 (via U1-U4,U6,U7)   -> edge_watch SM, event on any edge;
+//             sent in batches, by default rising edges only
 //   GP9..GP14 TEL1..6 (ESC telemetry, 115200) -> 6x PIO UART RX
 //   GP0/GP1   UART0 TX/RX <-> Pi UART5 (/dev/ttyAMA5), 921600 8N1
 //   GP25      onboard LED, 1 Hz blink
@@ -96,6 +97,9 @@ static uint clk_prog_offset;
 static uint32_t clk_rd, tacho_rd;
 static uint32_t clk_seq, tacho_seq;
 static uint32_t tacho_prev_state;
+static bool tacho_rising_only = true;
+static tacho_batch_t tacho_batch;
+static uint64_t tacho_flush_ticks;
 
 static tel_chunk_t tel[N_TEL];
 static uint64_t tel_gap_ticks;
@@ -115,6 +119,7 @@ static void timebase_init(void) {
     // 1 MHz tick: 6.7 ns resolution, 32-bit wrap after 28.6 s.
     timer1_hw->source = TIMER_SOURCE_CLK_SYS_BITS;
     tick_hz = clock_get_hz(clk_sys);
+    tacho_flush_ticks = (uint64_t)tick_hz * TACHO_BATCH_FLUSH_MS / 1000u;
 }
 
 // --- link TX ring -----------------------------------------------------------
@@ -152,7 +157,7 @@ static void send_info(void) {
     p = put_u8(p, N_TACHO);
     p = put_u8(p, N_TEL);
     p = put_u32(p, TEL_BAUD);
-    p = put_u8(p, TACHO_SELFTEST ? INFO_FLAG_SELFTEST : 0);
+    p = put_u8(p, (TACHO_SELFTEST ? INFO_FLAG_SELFTEST : 0) | (tacho_rising_only ? INFO_FLAG_RISING_ONLY : 0));
     p = put_u64(p, now_ticks());
     char fw[16] = {0};
     strncpy(fw, FW_VERSION, sizeof(fw));
@@ -258,6 +263,12 @@ static void capture_init(void) {
     pio_sm_set_enabled(PIO_CAP, SM_TACHO, true);
 }
 
+static void tacho_emit(void) {
+    size_t n = tacho_batch_len(&tacho_batch);
+    if (n) link_send(PKT_TACHO_BATCH, tacho_batch.payload, (uint8_t)n);
+    tacho_batch_reset(&tacho_batch);
+}
+
 static inline uint32_t ring_write_index(int ts_ch, const uint32_t *ring, uint32_t n) {
     return ((dma_hw->ch[ts_ch].write_addr - (uint32_t)(uintptr_t)ring) / 4u) & (n - 1);
 }
@@ -279,15 +290,16 @@ static void service_capture(void) {
     }
     while (tacho_rd != tacho_wr) {
         uint64_t t = ts_extend(tacho_ts_ring[tacho_rd], now);
-        uint32_t state = tacho_state_ring[tacho_rd] & ((1u << N_TACHO) - 1);
+        uint8_t state = (uint8_t)(tacho_state_ring[tacho_rd] & ((1u << N_TACHO) - 1));
         tacho_rd = (tacho_rd + 1) & (TACHO_RING_N - 1);
-        p = put_u32(buf, tacho_seq++);
-        p = put_u64(p, t);
-        p = put_u8(p, (uint8_t)state);
-        p = put_u8(p, (uint8_t)(state ^ tacho_prev_state));
+        uint8_t report = tacho_report_mask(state, (uint8_t)tacho_prev_state, tacho_rising_only);
         tacho_prev_state = state;
-        link_send(PKT_TACHO, buf, (uint8_t)(p - buf));
+        if (!report) continue;
+        if (tacho_batch_needs_flush(&tacho_batch, t)) tacho_emit();
+        tacho_batch_add(&tacho_batch, tacho_seq++, t, state, report);
     }
+    // Keep the latency bounded at low rates (live view, stopped rotors).
+    if (tacho_batch.n && now - tacho_batch.t_first > tacho_flush_ticks) tacho_emit();
     // edge_watch uses `push noblock`; a full FIFO drops events and sets RXSTALL.
     uint32_t stall = 1u << (PIO_FDEBUG_RXSTALL_LSB + SM_TACHO);
     if (PIO_CAP->fdebug & stall) {
@@ -381,6 +393,13 @@ static void handle_command(const frame_decoder_t *d, uint64_t t_rx) {
         send_info();
         break;
     }
+    case CMD_SET_TACHO_EDGES:
+        if (d->len >= 1 && d->payload[0] <= TACHO_EDGES_RISING) {
+            tacho_emit();  // events of one batch always share one mode
+            tacho_rising_only = d->payload[0] == TACHO_EDGES_RISING;
+        }
+        send_info();
+        break;
     case CMD_BOOTSEL:
         if (d->len >= 4 && get_u32(d->payload) == BOOTSEL_MAGIC) {
             // Let the reply-less reboot happen only after pending TX is out.

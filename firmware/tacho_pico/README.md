@@ -8,7 +8,7 @@ UART an den Onboard-Pi. Host-Seite: `pico_link.py` (Empfänger), `daq.py` (HDF5)
 | Pico | Signal | Erfassung |
 |---|---|---|
 | GP2 | PDM_CLK (J7 → U5) | PIO0 SM0 `clkdiv`: Ereignis alle `clk_div` steigenden Flanken (Default 16384 = 256 Samples) |
-| GP3–GP8 | TACHO_1–6 (J1–J6 → U1–U4, U6, U7) | PIO0 SM1 `edge_watch`: jede Flanke, Pinzustand aller 6 Kanäle |
+| GP3–GP8 | TACHO_1–6 (J1–J6 → U1–U4, U6, U7) | PIO0 SM1 `edge_watch`: jede Flanke, Pinzustand aller 6 Kanäle; gesendet gebündelt, standardmäßig nur steigende Flanken |
 | GP9–GP14 | TEL1–6 (J10–J13, J22, J23) | PIO1 SM0–3, PIO2 SM0–1 `uart_rx`, 115200 8N1 |
 | GP0 / GP1 | UART0 TX/RX ↔ Pi UART5 (`/dev/ttyAMA5`, Header 33/32) | 921600 8N1 |
 | GP25 | Onboard-LED | blinkt mit 1 Hz (STATUS) |
@@ -33,18 +33,30 @@ Maßgeblich ist `src/protocol.h`, `pico_link.py` muss dazu passen (`PROTO_VERSIO
 
 | Typ | Richtung | Payload |
 |---|---|---|
-| 0x01 INFO | → Pi | proto u16, tick_hz u32, clk_div u32, n_tacho u8, n_tel u8, tel_baud u32, flags u8 (bit0 Self-Test), t_now u64, fw char[16]. Beim Start, alle 5 s und auf Anfrage |
-| 0x02 STATUS | → Pi | 1 Hz: t_now, TIMER0-µs, Zähler (clk, tacho, link_drops, rx_crc, tacho_stalls, loop_max_us), pro TEL Bytes/Framing-Fehler/Überläufe |
+| 0x01 INFO | → Pi | proto u16, tick_hz u32, clk_div u32, n_tacho u8, n_tel u8, tel_baud u32, flags u8 (bit0 Self-Test, bit1 nur steigende Tachoflanken), t_now u64, fw char[16]. Beim Start, alle 5 s und auf Anfrage |
+| 0x02 STATUS | → Pi | 1 Hz: t_now, TIMER0-µs, Zähler (clk, gemeldete Tachoereignisse, link_drops, rx_crc, tacho_stalls, loop_max_us), pro TEL Bytes/Framing-Fehler/Überläufe |
 | 0x10 CLK | → Pi | seq u32, t u64 |
-| 0x11 TACHO | → Pi | seq u32, t u64, state u8, changed u8 (Bit n = TACHO n+1) |
+| 0x11 TACHO | → Pi | nur Protokoll 1: seq u32, t u64, state u8, changed u8 (Bit n = TACHO n+1) |
 | 0x12 TEL | → Pi | ch u8, flags u8, seq u32, t_first u64, n u8, data[n]: rohe ESC-Bytes, durch Leitungspausen (> 3 Bytezeiten) in Stücke geteilt. KISS-Framing und CRC8 prüft der Pi |
 | 0x13 PONG | → Pi | id u32, t_rx u64 (Antwort auf PING, für die Abbildung Pi-Zeit ↔ Pico-Zeit) |
+| 0x14 TACHO_BATCH | → Pi | seq_first u32, t_first u64, n u8, n × {state u8, changed u8, dt u24}: bis 23 Ereignisse, dt in Ticks zum vorigen Ereignis. Gesendet, wenn voll, wenn dt nicht mehr in 24 Bit passt (111 ms), oder 10 ms nach dem ersten Ereignis |
 | 0x80 PING | → Pico | id u32 |
 | 0x81 GET_INFO | → Pico | – |
 | 0x82 SET_CLKDIV | → Pico | div u32 (Vielfaches von 64, ≥ 1024) |
+| 0x83 SET_TACHO_EDGES | → Pico | u8: 0 beide Flanken, 1 nur steigende (Standard nach dem Start). Antwort INFO |
 | 0x8F BOOTSEL | → Pico | magic u32 0xB0075E1F: Neustart in den USB-Bootloader |
 
-Last bei 6 Rotoren (beide Flanken), 6 ESCs à 100 Hz und Takt: ≈ 35 kB/s von 92 kB/s.
+Linklast: Ein Tachoereignis kostet im Batch ≈ 5,8 Byte (vorher 20 Byte pro Frame). Gleichzeitige Flanken
+mehrerer Kanäle teilen sich ein Ereignis. Mit 17 Marken pro Umdrehung, nur steigenden Flanken, ESC-Telemetrie
+(≈ 30 Hz pro ESC) und Takt:
+
+| Rotoren × Drehzahl | Tacho | gesamt (von 92 kB/s) |
+|---|---|---|
+| 4 × 2500 rpm | 16 kB/s | ≈ 23 kB/s |
+| 4 × 6000 rpm | 40 kB/s | ≈ 47 kB/s |
+| 6 × 6000 rpm | 60 kB/s | ≈ 69 kB/s |
+
+Beide Flanken (`--tacho-edges both`, `tacho_live.py`) verdoppeln den Tachoanteil.
 
 ## Bauen
 

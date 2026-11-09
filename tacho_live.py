@@ -8,7 +8,8 @@ chatter), rpm and timing jitter from the last transitions.
     python tacho_live.py                 # Ctrl+C to quit
     python tacho_live.py --settle 0.5 --pulses-per-rev 1
 
-Opens /dev/ttyAMA5 itself, so daq.py must not run at the same time.
+Opens /dev/ttyAMA5 itself, so daq.py must not run at the same time. Switches the
+Pico to both tacho edges; daq.py selects its own mode (default rising) at start.
 """
 
 import argparse
@@ -125,6 +126,8 @@ def main():
         print(f'No answer from the Pico on {args.port}. Is daq.py running?')
         link.stop()
         return
+    if link.set_tacho_edges('both') is None and info['proto'] >= 2:
+        print('WARNING: could not switch the Pico to both tacho edges')
     tick_hz = info['tick_hz']
     chans = [Channel(args.settle * 1e-3 * tick_hz, args.window) for _ in range(N_TACHO)]
     now_tick = 0

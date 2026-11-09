@@ -96,6 +96,40 @@ static void test_tel_chunk(void) {
     CHECK(c.n == TEL_CHUNK_MAX && (c.flags & TEL_FLAG_OVERFLOW));
 }
 
+static void test_tacho_batch(void) {
+    CHECK(tacho_report_mask(0x05, 0x04, false) == 0x01);
+    CHECK(tacho_report_mask(0x04, 0x05, false) == 0x01);
+    CHECK(tacho_report_mask(0x04, 0x05, true) == 0x00);   // falling only: not sent
+    CHECK(tacho_report_mask(0x06, 0x05, true) == 0x02);   // ch1 falls, ch2 rises
+
+    tacho_batch_t b;
+    tacho_batch_reset(&b);
+    CHECK(tacho_batch_len(&b) == 0 && !tacho_batch_needs_flush(&b, 123));
+    uint64_t t = 0xFFFFFF00ull;
+    tacho_batch_add(&b, 100, t, 0x01, 0x01);
+    CHECK(get_u32(b.payload) == 100 && b.payload[12] == 1);
+    for (int i = 1; i < TACHO_BATCH_MAX; i++) {
+        t += 1000u + (uint64_t)i;
+        CHECK(!tacho_batch_needs_flush(&b, t));
+        tacho_batch_add(&b, 100u + (uint32_t)i, t, (uint8_t)i, 0x02);
+    }
+    CHECK(tacho_batch_len(&b) == TACHO_BATCH_HEAD + TACHO_BATCH_MAX * TACHO_BATCH_ENTRY);
+    CHECK(tacho_batch_len(&b) <= FRAME_MAX_PAYLOAD);
+    CHECK(tacho_batch_needs_flush(&b, t + 1));                // full
+    // the sum of dt reproduces the last timestamp
+    uint64_t acc = 0;
+    for (int i = 0; i < TACHO_BATCH_MAX; i++) {
+        const uint8_t *e = b.payload + TACHO_BATCH_HEAD + i * TACHO_BATCH_ENTRY;
+        acc += (uint32_t)e[2] | ((uint32_t)e[3] << 8) | ((uint32_t)e[4] << 16);
+    }
+    CHECK(0xFFFFFF00ull + acc == t);
+
+    tacho_batch_reset(&b);
+    tacho_batch_add(&b, 7, 1000, 1, 1);
+    CHECK(!tacho_batch_needs_flush(&b, 1000 + TACHO_DT_MAX));
+    CHECK(tacho_batch_needs_flush(&b, 1000 + TACHO_DT_MAX + 1));   // dt does not fit 24 bit
+}
+
 // Emit one frame of each Pico->Pi type as hex lines for the Python test.
 static void emit_hex(uint8_t type, const uint8_t *p, size_t len) {
     uint8_t frame[FRAME_MAX_PAYLOAD + FRAME_OVERHEAD];
@@ -118,6 +152,12 @@ static void emit_golden(void) {
     emit_hex(PKT_TEL, b, n);
     p = put_u32(b, 0xDEADBEEF); p = put_u64(p, 987654321ull);
     emit_hex(PKT_PONG, b, (size_t)(p - b));
+    tacho_batch_t tb;
+    tacho_batch_reset(&tb);
+    tacho_batch_add(&tb, 500, 0x200000000ull, 0x01, 0x01);
+    tacho_batch_add(&tb, 501, 0x200000000ull + 12345, 0x03, 0x02);
+    tacho_batch_add(&tb, 502, 0x200000000ull + 12345 + TACHO_DT_MAX, 0x13, 0x10);
+    emit_hex(PKT_TACHO_BATCH, tb.payload, tacho_batch_len(&tb));
 }
 
 int main(int argc, char **argv) {
@@ -129,6 +169,7 @@ int main(int argc, char **argv) {
     test_ts_extend();
     test_frame_roundtrip();
     test_tel_chunk();
+    test_tacho_batch();
     if (failures) {
         fprintf(stderr, "%d failure(s)\n", failures);
         return 1;
