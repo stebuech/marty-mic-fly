@@ -7,14 +7,25 @@ project(tacho_pico C CXX ASM)
 set(CMAKE_C_STANDARD 11)
 pico_sdk_init()
 
+# Commit hash, "-dirty" only for uncommitted changes in this firmware directory
+# (unrelated work elsewhere in the repository does not mark the build).
+# Evaluated at configure time: re-run cmake after committing.
 execute_process(
-    COMMAND git describe --always --dirty --abbrev=8
+    COMMAND git rev-parse --short=8 HEAD
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
     OUTPUT_VARIABLE FW_GIT_VERSION
     OUTPUT_STRIP_TRAILING_WHITESPACE
     ERROR_QUIET)
+execute_process(
+    COMMAND git status --porcelain -- .
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    OUTPUT_VARIABLE FW_GIT_CHANGES
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET)
 if(NOT FW_GIT_VERSION)
     set(FW_GIT_VERSION "nogit")
+elseif(FW_GIT_CHANGES)
+    set(FW_GIT_VERSION "${FW_GIT_VERSION}-dirty")
 endif()
 
 function(tacho_target name selftest)
